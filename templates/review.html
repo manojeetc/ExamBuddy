@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Review · Exam Practice{% endblock %}
+{% block content %}
+<section class="hero">
+  <span class="eyebrow">REVISIT</span>
+  <h1>Review items</h1>
+  <p>Search questions you marked for review and work through your notes.</p>
+</section>
+
+<form class="review-filter card" method="get" action="{{ url_for('review_view') }}">
+  <label for="reviewSearch"><span>Search reviews</span></label>
+  <input id="reviewSearch" name="q" type="search" value="{{ query }}" placeholder="Search exam, section, topic, question, or note">
+  <label class="review-filter-toggle"><input type="checkbox" name="completed" value="1" {% if show_completed %}checked{% endif %}> Show completed</label>
+  <button class="secondary" type="submit">Search</button>
+</form>
+
+{% if items %}
+<section class="review-list">
+  {% for item in items %}
+  <article class="card review-card{% if not item.review %} review-completed{% endif %}">
+    <div class="review-card-head">
+      <div>
+        <span class="eyebrow">QUESTION {{ item.question }}</span>
+        <h2>{{ item.exam_label }}</h2>
+        <div class="session-meta">
+          <span>{{ item.category }}</span>
+          {% if item.variant %}<span>{{ item.variant }}</span>{% endif %}
+          {% if item.section %}<span>{{ item.section }}</span>{% endif %}
+          {% if item.topic %}<span>{{ item.topic }}</span>{% endif %}
+        </div>
+      </div>
+      <span class="review-status">{% if item.review_status == 'needs_review' %}Needs review{% else %}Review complete{% endif %}</span>
+    </div>
+    <p class="review-note">{{ item.note or "No note added." }}</p>
+    <div class="review-actions">
+      {% if item.status != 'evaluated' %}<a class="secondary" href="{{ url_for('exam_view', session_id=item.session_id, question=item.question) }}">Open question</a>{% endif %}
+      {% if item.status == 'evaluated' %}<a class="primary" href="{{ url_for('result_view', session_id=item.session_id) }}">View result</a>{% endif %}
+      {% if item.review_status == 'needs_review' %}<button type="button" class="secondary review-complete" data-session="{{ item.session_id }}" data-question="{{ item.question }}">Mark complete</button>{% endif %}
+    </div>
+  </article>
+  {% endfor %}
+</section>
+{% else %}
+<section class="card empty-state">
+  <h2>{% if query %}No matching review items{% else %}No open review items{% endif %}</h2>
+  <p>Mark a question for review while practicing and add a note to find it here.</p>
+</section>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll('.review-complete').forEach(button => {
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    const response = await fetch(`/api/session/${encodeURIComponent(button.dataset.session)}/save`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({question: Number(button.dataset.question), review_status: 'completed'})
+    });
+    if (response.ok) button.closest('.review-card').remove();
+    else button.disabled = false;
+  });
+});
+</script>
+{% endblock %}

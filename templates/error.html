@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block title %}Cannot evaluate{% endblock %}
+{% block content %}
+<section class="card empty-state"><h1>Cannot evaluate this exam</h1><p>{{ message }}</p><a class="primary" href="{{ url_for('home') }}">Back to home</a></section>
+{% endblock %}

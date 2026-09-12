@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">ExamBuddy</title>
+  <desc id="desc">A blue and coral study companion mark</desc>
+  <rect width="64" height="64" rx="16" fill="#102a43"/>
+  <path d="M18 16h24v7H26v7h14v7H26v7h16v7H18V16Z" fill="#66c7f2"/>
+  <circle cx="45" cy="18" r="7" fill="#f28b72"/>
+  <circle cx="43" cy="17" r="2" fill="#102a43"/>
+  <path d="M39.5 21.5c1.9 1.8 4.8 2 6.9.4" fill="none" stroke="#102a43" stroke-linecap="round" stroke-width="2"/>
+  <path d="M49 10l2-3M55 15l3-1" stroke="#f28b72" stroke-linecap="round" stroke-width="2"/>
+</svg>

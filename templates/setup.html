@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Setup | Exam Practice{% endblock %}
+{% block content %}
+<section class="hero">
+  <div class="eyebrow">QUESTION BANK SETUP</div>
+  <h1>Import an exam PDF</h1>
+  <p>Convert a text-based exam PDF into individual question images for Practice and Analyze.</p>
+</section>
+<section class="card setup-card">
+  {% if error %}<div class="notice error">{{ error }}</div>{% endif %}
+  {% if result %}<div class="notice success">Imported {{ result.questions_created }} questions into {{ result.output_directory }}.</div>{% endif %}
+  <form method="post" enctype="multipart/form-data" class="form-grid">
+    <label>Exam family
+      <select name="family" required>
+        <option value="">Select a family</option>
+        {% for family in families %}<option value="{{ family }}" {% if request.form.get('family') == family %}selected{% endif %}>{{ family }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Exam name
+      <input name="exam_name" required value="{{ request.form.get('exam_name', '') }}" placeholder="AMC10_2025_A">
+      <small>Use a name such as AMC10_2025_A or AMC8_2023.</small>
+    </label>
+    <label class="full-width">PDF file
+      <input type="file" name="pdf" accept="application/pdf,.pdf" required>
+    </label>
+    <label>Questions expected
+      <input type="number" name="expected_questions" min="1" max="100" value="{{ request.form.get('expected_questions', '25') }}" required>
+    </label>
+    <label>Render quality (DPI)
+      <input type="number" name="dpi" min="150" max="400" step="10" value="{{ request.form.get('dpi', '250') }}" required>
+    </label>
+    <label class="check-row"><input type="checkbox" name="debug" {% if request.form.get('debug') == 'on' %}checked{% endif %}> Write page detection overlays</label>
+    <label class="check-row"><input type="checkbox" name="overwrite"> Replace an existing exam folder</label>
+    <div class="full-width form-actions"><button class="primary" type="submit">Import PDF</button></div>
+  </form>
+</section>
+<section class="card setup-card">
+  <h2>Import notes</h2>
+  <p class="muted">The importer uses the PDF text layer and question-number coordinates. It refuses incomplete sequences and never overwrites an existing exam unless you explicitly select that option.</p>
+</section>
+{% endblock %}

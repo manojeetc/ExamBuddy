@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Result · {{ session.exam_label }}{% endblock %}
+{% block content %}
+<section class="result-hero card">
+  <div>
+    <span class="eyebrow">EVALUATION</span>
+    <h1>{{ session.exam_label }}</h1>
+    <p>{{ evaluation.scoring_name }} · Answer key: {{ evaluation.answer_file }}</p>
+  </div>
+  <div class="score-circle"><strong>{{ evaluation.score }}</strong><span>/ {{ evaluation.maximum }}</span></div>
+</section>
+
+<div class="stats-grid">
+  <div class="stat correct"><span>Correct</span><strong>{{ evaluation.correct }}</strong></div>
+  <div class="stat incorrect"><span>Incorrect</span><strong>{{ evaluation.wrong }}</strong></div>
+  <div class="stat blank"><span>Blank</span><strong>{{ evaluation.blank }}</strong></div>
+  <div class="stat"><span>Time used</span><strong id="totalTime"></strong></div>
+</div>
+
+<section class="card result-table-card">
+  <div class="section-heading compact"><div><span class="eyebrow">QUESTION REVIEW</span><h2>Responses</h2></div></div>
+  <div class="table-wrap">
+    <table class="result-table">
+      <thead><tr><th>#</th><th>Your answer</th><th>Correct</th><th>Result</th><th>Points</th><th>Time</th></tr></thead>
+      <tbody>
+      {% for d in evaluation.details %}
+        <tr>
+          <td><a href="{{ url_for('question_image', session_id=session.session_id, question_number=d.question) }}" target="_blank">{{ d.question }}</a></td>
+          <td>{{ d.response or '—' }}</td><td>{{ d.correct_answer or '—' }}</td>
+          <td><span class="result-pill {{ d.result|lower }}">{{ d.result }}</span></td>
+          <td>{{ d.points }}</td><td data-seconds="{{ d.time_spent_seconds }}" class="time-cell"></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="result-actions">
+  <a class="secondary" href="{{ url_for('home') }}">← Home</a>
+  <form method="post" action="{{ url_for('retake', session_id=session.session_id) }}"><button class="primary" type="submit">Retake exam</button></form>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function fmt(seconds) { seconds=Math.round(Number(seconds)||0); const h=Math.floor(seconds/3600),m=Math.floor((seconds%3600)/60),s=seconds%60; return h?`${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${m}:${String(s).padStart(2,'0')}`; }
+document.querySelectorAll('.time-cell').forEach(el => el.textContent=fmt(el.dataset.seconds));
+document.getElementById('totalTime').textContent=fmt({{ session.active_elapsed_seconds|default(0) }});
+</script>
+{% endblock %}

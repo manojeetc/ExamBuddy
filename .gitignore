@@ -1,0 +1,21 @@
+# Local Python environments and generated files
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Local exam content and answer data
+QuestionBank/
+AnswerLog/
+Response/
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+
+# PyInstaller output
+build/
+dist/
+*.spec

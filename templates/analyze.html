@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Analyze · Exam Practice{% endblock %}
+{% block content %}
+<section class="hero">
+  <span class="eyebrow">PERFORMANCE</span>
+  <h1>Analyze your progress</h1>
+  <p>Accuracy across the second section and topic categories from evaluated exams.</p>
+</section>
+
+<form class="analysis-filter card" method="get" action="{{ url_for('analyze') }}">
+  <label for="familySelect"><span>Exam family</span></label>
+  <select id="familySelect" name="family" onchange="this.form.submit()">
+    <option value="">All exam families</option>
+    {% for family in families %}
+    <option value="{{ family }}" {% if family == selected_family %}selected{% endif %}>{{ family }}</option>
+    {% endfor %}
+  </select>
+</form>
+
+<section class="analysis-rollup">
+  <div class="stat"><span>Total available questions</span><strong>{{ rollup.available }}</strong></div>
+  <div class="stat"><span>Evaluated questions</span><strong>{{ rollup.questions }}</strong></div>
+  <div class="stat"><span>Evaluated exams</span><strong>{{ rollup.attempts }}</strong></div>
+  <div class="stat correct"><span>Correct</span><strong>{{ rollup.correct }}</strong></div>
+  <div class="stat"><span>Overall accuracy</span><strong>{{ rollup.accuracy }}%</strong></div>
+</section>
+
+{% if evaluated_sessions or rollup.available %}
+<section class="analysis-rollup">
+  <div class="stat incorrect"><span>Incorrect</span><strong>{{ rollup.wrong }}</strong></div>
+  <div class="stat blank"><span>Blank</span><strong>{{ rollup.blank }}</strong></div>
+</section>
+{% endif %}
+
+<section class="card analysis-card timing-card">
+  <div class="section-heading compact"><div><span class="eyebrow">TIME ON QUESTION</span><h2>Incorrect and blank questions above mean time</h2><p class="muted">Mean time: {{ mean_question_seconds }} seconds across evaluated questions. Returning to a question adds to its total.</p></div></div>
+  <div class="timing-grid timing-grid-three">
+    <div>
+      <h3>Mean by difficulty</h3>
+      {% for row in difficulty_rows %}
+      <div class="timing-row"><strong>{{ row.name }}</strong><span>{{ row.questions }} questions</span><b>{{ row.mean_seconds }}s</b></div>
+      {% else %}<p class="muted">No difficulty metadata found.</p>{% endfor %}
+    </div>
+    <div>
+      <h3>Sections above mean</h3>
+      {% for group in slow_sections %}
+      <details class="timing-group"><summary><strong>{{ group.name }}</strong><span>{{ group.questions|length }} questions · {{ group.mean_seconds }}s mean</span></summary>
+        {% for item in group.questions %}<a class="timing-row timing-link" href="{{ url_for('exam_view', session_id=item.session_id, question=item.question, reference=1) }}"><strong>{{ item.exam_label }} · Q{{ item.question }}</strong><span>{{ item.result }} · {{ item.topic }} · {{ item.difficulty }}</span><b>{{ item.seconds }}s</b></a>{% endfor %}
+      </details>
+      {% else %}<p class="muted">No sections above mean yet.</p>{% endfor %}
+    </div>
+    <div>
+      <h3>Topics above mean</h3>
+      {% for group in slow_topics %}
+      <details class="timing-group"><summary><strong>{{ group.name }}</strong><span>{{ group.questions|length }} questions · {{ group.mean_seconds }}s mean</span></summary>
+        {% for item in group.questions %}<a class="timing-row timing-link" href="{{ url_for('exam_view', session_id=item.session_id, question=item.question, reference=1) }}"><strong>{{ item.exam_label }} · Q{{ item.question }}</strong><span>{{ item.result }} · {{ item.section }} · {{ item.difficulty }}</span><b>{{ item.seconds }}s</b></a>{% endfor %}
+      </details>
+      {% else %}<p class="muted">No topics above mean yet.</p>{% endfor %}
+    </div>
+  </div>
+  {% if active_sessions %}
+  <div class="active-practice">
+    <h3>Exams in progress</h3>
+    {% for session in active_sessions %}<div class="active-practice-row"><span><strong>{{ session.exam_label }}</strong><small>{{ session.answered }}/{{ session.question_count }} answered</small></span><a class="secondary" href="{{ url_for('exam_view', session_id=session.session_id) }}">Resume</a></div>{% endfor %}
+  </div>
+  {% endif %}
+</section>
+
+{% if evaluated_sessions or rollup.available %}
+<section class="analysis-grid">
+  <section class="card analysis-card">
+    <div class="section-heading compact"><div><span class="eyebrow">SECTION 2</span><h2>Progress by section</h2><p class="muted">{{ sections_available }} available across all sections</p></div></div>
+    {% for row in sections %}
+    <a class="progress-row progress-row-selectable{% if row.name == selected_section %} selected{% endif %}" href="{{ url_for('analyze', family=selected_family, section='' if row.name == selected_section else row.name) }}" aria-label="{% if row.name == selected_section %}Show all topics{% else %}Filter topics by {{ row.name }}{% endif %}">
+      <div class="progress-label"><strong>{{ row.name }}</strong><span>{{ row.available }} available</span></div>
+      <div class="progress-metrics">
+        <span class="progress-tile"><small>Evaluated</small><strong>{{ row.evaluated }}/{{ row.available }}</strong></span>
+        <span class="progress-tile"><small>Correct</small><strong>{{ row.correct }}/{{ row.available }}</strong></span>
+      </div>
+      <div class="progress-visual"><div class="progress-track"><div class="progress-fill" style="width: {{ row.percent }}%"></div></div><span class="progress-percent">{{ row.percent }}% complete</span></div>
+    </a>
+      {% if selected_family %}
+      <div class="topic-actions">
+        <a href="{{ url_for('home', category=selected_family, content_section=row.name, selection_mode='all', exam_name=selected_family ~ ' ' ~ row.name ~ ' Full Set') }}">Full set</a>
+        <a href="{{ url_for('home', category=selected_family, content_section=row.name, selection_mode='incorrect', exam_name=selected_family ~ ' ' ~ row.name ~ ' Incorrect') }}">Incorrect</a>
+        <a href="{{ url_for('home', category=selected_family, content_section=row.name, selection_mode='incorrect_unattempted', exam_name=selected_family ~ ' ' ~ row.name ~ ' Incorrect and Unattempted') }}">Incorrect + unattempted</a>
+      </div>
+      {% else %}<span class="topic-action-hint">Select an exam family to practice</span>{% endif %}
+    {% else %}<p class="muted">No section metadata found for evaluated exams.</p>{% endfor %}
+  </section>
+
+  <section class="card analysis-card">
+    <div class="section-heading compact"><div><span class="eyebrow">TOPICS</span><h2>Progress by topic</h2><p class="muted">{{ topics_available }} available{% if selected_section %} in {{ selected_section }}{% else %} across all topics{% endif %}</p></div></div>
+    {% for row in topics %}
+    <div class="progress-row">
+      <div class="progress-label"><strong>{{ row.name }}</strong><span>{{ row.available }} available</span></div>
+      <div class="progress-metrics">
+        <span class="progress-tile"><small>Evaluated</small><strong>{{ row.evaluated }}/{{ row.available }}</strong></span>
+        <span class="progress-tile"><small>Correct</small><strong>{{ row.correct }}/{{ row.available }}</strong></span>
+      </div>
+      <div class="progress-visual"><div class="progress-track"><div class="progress-fill" style="width: {{ row.percent }}%"></div></div><span class="progress-percent">{{ row.percent }}% complete</span></div>
+      {% if selected_family %}
+      <div class="topic-actions" onclick="event.stopPropagation()">
+        <a href="{{ url_for('home', category=selected_family, content_section=selected_section, topic=row.name, selection_mode='all', exam_name=selected_family ~ ' ' ~ row.name ~ ' Full Set') }}">Full set</a>
+        <a href="{{ url_for('home', category=selected_family, content_section=selected_section, topic=row.name, selection_mode='incorrect', exam_name=selected_family ~ ' ' ~ row.name ~ ' Incorrect') }}">Incorrect</a>
+        <a href="{{ url_for('home', category=selected_family, content_section=selected_section, topic=row.name, selection_mode='incorrect_unattempted', exam_name=selected_family ~ ' ' ~ row.name ~ ' Incorrect and Unattempted') }}">Incorrect + unattempted</a>
+      </div>
+      {% else %}<span class="topic-action-hint">Select an exam family to practice</span>{% endif %}
+    </div>
+    {% else %}<p class="muted">No topic metadata found for evaluated exams.</p>{% endfor %}
+  </section>
+</section>
+
+<section class="section-heading"><div><span class="eyebrow">HISTORY</span><h2>Evaluated exams</h2></div></section>
+<div class="session-list">
+  {% for session in evaluated_sessions %}
+  <article class="session-card">
+    <div class="session-main"><h3>{{ session.exam_label }}</h3><div class="session-meta"><span>Score {{ session.score }}/{{ session.maximum }}</span><span>{{ session.evaluated_at }}</span></div></div>
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<section class="card empty-state"><h2>No evaluated exams{% if selected_family %} in {{ selected_family }}{% endif %}</h2><p>Complete and evaluate an exam to see section and topic progress here.</p><a class="primary" href="{{ url_for('home') }}">Go to Practice</a></section>
+{% endif %}
+{% endblock %}

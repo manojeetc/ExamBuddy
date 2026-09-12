@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script>
+    (() => {
+      const saved = localStorage.getItem('exam-practice-theme');
+      const theme = saved || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      document.documentElement.dataset.theme = theme;
+    })();
+  </script>
+  <title>{% block title %}ExamBuddy{% endblock %}</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='exambuddy-mark.svg') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('home') }}"><img src="{{ url_for('static', filename='exambuddy-mark.svg') }}" alt=""> <span>ExamBuddy</span></a>
+    <div class="topbar-subtitle">Your local study companion</div>
+    <nav class="topnav" aria-label="Main navigation">
+      <a class="{% if request.endpoint == 'home' %}active{% endif %}" href="{{ url_for('home') }}">Practice</a>
+      <a class="{% if request.endpoint == 'analyze' %}active{% endif %}" href="{{ url_for('analyze') }}">Analyze</a>
+      <a class="{% if request.endpoint == 'review_view' %}active{% endif %}" href="{{ url_for('review_view') }}">Review</a>
+      <a class="{% if request.endpoint == 'setup' %}active{% endif %}" href="{{ url_for('setup') }}">Setup</a>
+    </nav>
+    <button class="theme-toggle" id="themeToggle" type="button" aria-label="Switch theme" title="Switch theme"><span aria-hidden="true">◐</span><span class="theme-toggle-label">Dark mode</span></button>
+  </header>
+  <main class="page-shell">{% block content %}{% endblock %}</main>
+  {% block scripts %}{% endblock %}
+  <script>
+    const themeToggle = document.getElementById('themeToggle');
+    function updateThemeButton() {
+      const dark = document.documentElement.dataset.theme === 'dark';
+      themeToggle.querySelector('span:last-child').textContent = dark ? 'Light mode' : 'Dark mode';
+      themeToggle.firstElementChild.textContent = dark ? '○' : '◐';
+      themeToggle.setAttribute('aria-label', dark ? 'Switch to light mode' : 'Switch to dark mode');
+    }
+    themeToggle.addEventListener('click', () => {
+      const theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+      document.documentElement.dataset.theme = theme;
+      localStorage.setItem('exam-practice-theme', theme);
+      updateThemeButton();
+    });
+    updateThemeButton();
+  </script>
+</body>
+</html>

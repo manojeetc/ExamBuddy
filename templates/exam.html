@@ -1,0 +1,277 @@
+{% extends "base.html" %}
+{% block title %}{{ session.exam_label }} · Exam Practice{% endblock %}
+{% block content %}
+<div class="exam-layout">
+  <aside class="question-sidebar">
+    <div class="sidebar-title">
+      <span class="eyebrow">EXAM</span>
+      <h2>{{ session.exam_label }}</h2>
+    </div>
+    <div class="progress-summary"><span id="answeredCount">0</span>/{{ session.question_count }} answered</div>
+    <div class="question-grid" id="questionGrid"></div>
+    <a class="secondary full" href="{% if session.reference_mode %}{{ url_for('analyze') }}{% else %}{{ url_for('home') }}{% endif %}" id="saveExit">{% if session.reference_mode %}Back to Analyze{% else %}Save &amp; exit{% endif %}</a>
+  </aside>
+
+  <section class="exam-main">
+    <div class="exam-toolbar">
+      <div>
+        <span class="eyebrow">QUESTION</span>
+        <h1 id="questionHeading">Question 1 of {{ session.question_count }}</h1>
+        {% if session.reference_mode %}<p class="reference-notice">Reference view: answers cannot be changed.</p>{% endif %}
+      </div>
+      <div class="timer-box">
+        <span>{% if session.mode == 'timed' %}Time remaining{% else %}Session time{% endif %}</span>
+        <strong id="mainTimer">00:00</strong>
+      </div>
+    </div>
+
+    <div class="question-card">
+      <div class="image-stage">
+        <img id="questionImage" alt="Exam question">
+      </div>
+      <div class="question-time">Time on this question: <strong id="questionTime">0:00</strong></div>
+    </div>
+
+    <div class="answer-panel">
+      <div class="answer-title">Select your answer <span>Keyboard: A–E</span></div>
+      <div class="answer-buttons" id="answerButtons">
+        {% for choice in answer_choices %}
+        <button type="button" class="answer-btn" data-answer="{{ choice }}">{{ choice }}</button>
+        {% endfor %}
+        <button type="button" class="clear-btn" id="clearAnswer">Clear</button>
+      </div>
+    </div>
+
+    <div class="review-panel">
+      <label class="review-toggle"><input type="checkbox" id="reviewCheck"> Review this question</label>
+      <label><span>Notes / remarks</span><textarea id="reviewNote" rows="3" maxlength="2000" placeholder="What should you revisit?"></textarea></label>
+      <button type="button" class="secondary" id="saveReview">Save review</button>
+      <span class="autosave-state" id="reviewState"></span>
+    </div>
+
+    <div class="exam-nav">
+      <button type="button" class="secondary" id="prevBtn">← Previous</button>
+      <div class="autosave-state" id="autosaveState">Saved</div>
+      <button type="button" class="primary" id="nextBtn">Next →</button>
+      <button type="button" class="primary finish hidden" id="finishBtn">Evaluate exam</button>
+    </div>
+  </section>
+</div>
+
+<form method="post" action="{{ url_for('finish_exam', session_id=session.session_id) }}" id="finishForm"></form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const state = {{ session|tojson }};
+const referenceMode = Boolean(state.reference_mode);
+let currentIndex = Number(state.current_index || 0);
+let committedActive = Number(state.active_elapsed_seconds || 0);
+let responses = state.responses || {};
+let lastCommitPerf = performance.now();
+let saveInFlight = Promise.resolve();
+let questionStartedAt = null;
+let activeQuestion = null;
+let finishing = false;
+let finishRequested = false;
+let leaving = false;
+
+const image = document.getElementById('questionImage');
+const heading = document.getElementById('questionHeading');
+const grid = document.getElementById('questionGrid');
+const answerButtons = [...document.querySelectorAll('.answer-btn')];
+const clearBtn = document.getElementById('clearAnswer');
+const prevBtn = document.getElementById('prevBtn');
+const nextBtn = document.getElementById('nextBtn');
+const finishBtn = document.getElementById('finishBtn');
+const timerEl = document.getElementById('mainTimer');
+const qTimerEl = document.getElementById('questionTime');
+const saveState = document.getElementById('autosaveState');
+const reviewCheck = document.getElementById('reviewCheck');
+const reviewNote = document.getElementById('reviewNote');
+const saveReview = document.getElementById('saveReview');
+const reviewState = document.getElementById('reviewState');
+
+function qnum() { return Number(state.question_numbers[currentIndex]); }
+function pendingDelta() { return Math.max(0, (performance.now() - lastCommitPerf) / 1000); }
+function fmtSeconds(seconds) {
+  seconds = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60), s = seconds % 60;
+  return h ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}` : `${m}:${String(s).padStart(2,'0')}`;
+}
+function selectedAnswer(question=qnum()) { return (responses[String(question)] || {}).answer || null; }
+
+function buildGrid() {
+  grid.innerHTML = '';
+  for (let i=0; i<state.question_count; i++) {
+    const b = document.createElement('button');
+    b.type='button'; b.textContent=String(i+1); b.className='q-chip'; b.dataset.index=String(i);
+    b.addEventListener('click', async () => { await commitCurrent(i); currentIndex=i; render(); });
+    grid.appendChild(b);
+  }
+}
+
+function updateGrid() {
+  const answered = Object.values(responses).filter(r => r && r.answer).length;
+  document.getElementById('answeredCount').textContent = answered;
+  [...grid.children].forEach((b, i) => {
+    b.classList.toggle('current', i === currentIndex);
+    b.classList.toggle('answered', Boolean((responses[String(i+1)] || {}).answer));
+  });
+}
+
+function render() {
+  const q = qnum();
+  const response = responses[String(q)] || (responses[String(q)] = {answer:null,time_spent_seconds:0});
+  if (activeQuestion !== q) {
+    activeQuestion = q;
+    questionStartedAt = response.active_started_at || new Date().toISOString();
+    response.active_started_at = questionStartedAt;
+  }
+  heading.textContent = `Question ${q} of ${state.question_count}`;
+  image.src = `/question/${encodeURIComponent(state.session_id)}/${q}`;
+  const selected = selectedAnswer();
+  answerButtons.forEach(b => b.classList.toggle('selected', b.dataset.answer === selected));
+  answerButtons.forEach(b => b.disabled = referenceMode);
+  clearBtn.disabled = referenceMode;
+  const review = response;
+  reviewCheck.checked = (review.review_status || (review.review ? 'needs_review' : 'not_flagged')) === 'needs_review';
+  reviewNote.value = review.note || '';
+  prevBtn.disabled = currentIndex === 0;
+  const last = currentIndex === state.question_count - 1;
+  nextBtn.classList.toggle('hidden', last);
+  finishBtn.classList.toggle('hidden', referenceMode || !last);
+  updateGrid();
+  updateTimers();
+}
+
+async function doSave(targetIndex=currentIndex) {
+  if (finishing) return;
+  const q = qnum();
+  const delta = referenceMode ? 0 : Math.min(120, pendingDelta());
+  const answer = selectedAnswer(q);
+  const review = responses[String(q)] || {};
+  const endingQuestion = !referenceMode && (targetIndex !== currentIndex || leaving || finishRequested);
+  const endedAt = endingQuestion ? new Date().toISOString() : null;
+  saveState.textContent = 'Saving…';
+  const response = await fetch(`/api/session/${encodeURIComponent(state.session_id)}/save`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({question:q, answer, review_status:review.review_status || (review.review ? 'needs_review' : 'not_flagged'), note:review.note || '', delta_seconds:delta, current_index:targetIndex, question_started_at:questionStartedAt, question_ended_at:endedAt})
+  });
+  if (!response.ok) throw new Error('Autosave failed');
+  const data = await response.json();
+  const resp = responses[String(q)] || (responses[String(q)] = {answer:null,time_spent_seconds:0});
+  resp.time_spent_seconds = Number(data.question_time_seconds || resp.time_spent_seconds || 0);
+  if (endedAt) {
+    resp.question_ended_at = endedAt;
+    delete resp.active_started_at;
+  }
+  committedActive = Number(data.active_elapsed_seconds || committedActive);
+  lastCommitPerf = performance.now();
+  saveState.textContent = 'Saved';
+  return true;
+}
+
+async function saveReviewState() {
+  const key = String(qnum());
+  if (!responses[key]) responses[key] = {answer:null,time_spent_seconds:0};
+  responses[key].review = reviewCheck.checked;
+  responses[key].review_status = reviewCheck.checked ? 'needs_review' : 'not_flagged';
+  responses[key].note = reviewNote.value;
+  reviewState.textContent = 'Saving…';
+  await commitCurrent(currentIndex);
+  reviewState.textContent = reviewCheck.checked ? 'Saved for review' : 'Review complete';
+}
+
+function commitCurrent(targetIndex=currentIndex) {
+  saveInFlight = saveInFlight.then(() => doSave(targetIndex)).catch(err => {
+    console.error(err); saveState.textContent = 'Save failed — retry';
+    return false;
+  });
+  return saveInFlight;
+}
+
+async function chooseAnswer(answer) {
+  if (referenceMode) return;
+  const key = String(qnum());
+  if (!responses[key]) responses[key] = {answer:null,time_spent_seconds:0};
+  responses[key].answer = answer;
+  render();
+  await commitCurrent(currentIndex);
+}
+
+answerButtons.forEach(b => b.addEventListener('click', () => chooseAnswer(b.dataset.answer)));
+clearBtn.addEventListener('click', () => { if (!referenceMode) chooseAnswer(null); });
+prevBtn.addEventListener('click', async () => { if (currentIndex>0) { await commitCurrent(currentIndex-1); currentIndex--; render(); } });
+nextBtn.addEventListener('click', async () => { if (currentIndex<state.question_count-1) { await commitCurrent(currentIndex+1); currentIndex++; render(); } });
+
+async function finishExam(auto=false) {
+  if (finishing || finishRequested) return;
+  if (!auto && !confirm('Evaluate this exam now? Unanswered questions will be scored as blank.')) return;
+  finishRequested = true;
+  await commitCurrent(currentIndex);
+  finishing = true;
+  document.getElementById('finishForm').submit();
+}
+finishBtn.addEventListener('click', () => finishExam(false));
+saveReview.addEventListener('click', saveReviewState);
+reviewCheck.addEventListener('change', saveReviewState);
+
+function updateTimers() {
+  const delta = referenceMode ? 0 : pendingDelta();
+  const activeNow = committedActive + delta;
+  const qBase = Number((responses[String(qnum())] || {}).time_spent_seconds || 0);
+  qTimerEl.textContent = fmtSeconds(qBase + delta);
+  if (state.mode === 'timed') {
+    const limit = Number(state.duration_minutes) * 60;
+    const remaining = Math.max(0, limit - activeNow);
+    timerEl.textContent = fmtSeconds(remaining);
+    timerEl.classList.toggle('urgent', remaining <= 300);
+    if (remaining <= 0 && !finishing) finishExam(true);
+  } else {
+    timerEl.textContent = fmtSeconds(activeNow);
+  }
+}
+
+// A–E selects an answer; arrows navigate. Ignore keystrokes in form fields.
+document.addEventListener('keydown', async (e) => {
+  if (['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName)) return;
+  const key = e.key.toUpperCase();
+  if (!referenceMode && ['A','B','C','D','E'].includes(key)) { e.preventDefault(); chooseAnswer(key); }
+  else if (e.key === 'ArrowRight' && currentIndex < state.question_count-1) { e.preventDefault(); await commitCurrent(currentIndex+1); currentIndex++; render(); }
+  else if (e.key === 'ArrowLeft' && currentIndex > 0) { e.preventDefault(); await commitCurrent(currentIndex-1); currentIndex--; render(); }
+});
+
+// Best-effort save when leaving the exam page.
+window.addEventListener('pagehide', () => {
+  if (referenceMode || finishing || leaving) return;
+  const review = responses[String(qnum())] || {};
+  const payload = JSON.stringify({question:qnum(), answer:selectedAnswer(), review_status:review.review_status || (review.review ? 'needs_review' : 'not_flagged'), note:review.note || '', delta_seconds:Math.min(120,pendingDelta()), current_index:currentIndex, question_started_at:questionStartedAt, question_ended_at:new Date().toISOString()});
+  navigator.sendBeacon(`/api/session/${encodeURIComponent(state.session_id)}/save`, new Blob([payload], {type:'application/json'}));
+});
+
+document.getElementById('saveExit').addEventListener('click', async (e) => {
+  e.preventDefault();
+  const exitUrl = e.currentTarget.href;
+  if (referenceMode) {
+    window.location = exitUrl;
+    return;
+  }
+  leaving = true;
+  clearInterval(timerInterval);
+  clearInterval(autosaveInterval);
+  const saved = await commitCurrent(currentIndex);
+  if (saved) {
+    window.location = exitUrl;
+  } else {
+    leaving = false;
+    saveState.textContent = 'Could not save. Check that the app is running, then retry.';
+  }
+});
+
+const timerInterval = setInterval(updateTimers, 250);
+const autosaveInterval = referenceMode ? null : setInterval(() => commitCurrent(currentIndex), 15000);
+
+buildGrid(); render();
+</script>
+{% endblock %}

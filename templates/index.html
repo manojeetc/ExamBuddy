@@ -1,0 +1,233 @@
+{% extends "base.html" %}
+{% block title %}Exam Practice{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <span class="eyebrow">QUESTION BANK</span>
+    <h1>Start a practice exam</h1>
+    <p>Select an exam discovered from the <code>QuestionBank</code> folder, choose timed or untimed mode, and begin.</p>
+  </div>
+</section>
+
+{% if exams %}
+<section class="card setup-card">
+  <form method="post" action="{{ url_for('start_exam') }}" id="startForm">
+    <div class="form-grid">
+      <label>
+        <span>Exam family</span>
+        <select name="category" id="categorySelect" required></select>
+      </label>
+      <label>
+        <span>Exam</span>
+        <select name="variant" id="variantSelect"></select>
+      </label>
+      <label>
+        <span>Exam name <b class="required-marker">*</b></span>
+        <input type="text" name="exam_name" id="examName" placeholder="My practice set" value="{{ practice_prefill.exam_name }}" required aria-required="true">
+        <small class="field-hint">Required before starting practice</small>
+      </label>
+      <label>
+        <span>Section</span>
+        <select name="content_section" id="contentSection"><option value="">All sections</option></select>
+      </label>
+      <label>
+        <span>Topic</span>
+        <select name="topic" id="topicSelect"><option value="">All topics</option></select>
+      </label>
+    </div>
+
+    <div class="practice-options">
+      <label>
+        <span>Question selection</span>
+        <select name="selection_mode" id="selectionMode">
+          <option value="all">Full set</option>
+          <option value="incorrect">Previously incorrect questions only</option>
+          <option value="incorrect_unattempted">Incorrect and unattempted questions</option>
+        </select>
+      </label>
+      <label>
+        <span>Number of questions</span>
+        <input type="number" name="question_count" id="questionCount" min="1" value="25">
+      </label>
+    </div>
+    <div class="question-availability" id="questionAvailability"></div>
+
+    <div class="mode-row">
+      <label class="mode-card selected" id="timedCard">
+        <input type="radio" name="mode" value="timed" checked>
+        <strong>Timed</strong>
+        <small>Countdown with a configurable time limit</small>
+      </label>
+      <label class="mode-card" id="untimedCard">
+        <input type="radio" name="mode" value="untimed">
+        <strong>Untimed</strong>
+        <small>Track time per question without a deadline</small>
+      </label>
+    </div>
+
+    <div class="timer-config" id="timerConfig">
+      <div class="timer-heading">
+        <span>Time limit</span>
+        <strong id="timerValue">75 minutes</strong>
+      </div>
+      <input type="range" name="duration_minutes" id="durationSlider" min="5" max="300" step="5" value="75">
+      <div class="slider-labels"><span>5 min</span><span>5 hours</span></div>
+    </div>
+
+    <button class="primary big" type="submit">Start practice</button>
+  </form>
+</section>
+{% else %}
+<section class="card empty-state">
+  <h2>No exams found</h2>
+  <p>Add image files under <code>QuestionBank/&lt;Exam&gt;/&lt;Year_Section&gt;/</code>.</p>
+</section>
+{% endif %}
+
+<section class="section-heading">
+  <div><span class="eyebrow">RESPONSE FOLDER</span><h2>Saved sessions</h2></div>
+  <p>Sessions are autosaved after every answer and while you work.</p>
+</section>
+
+{% if saved_sessions %}
+<div class="session-list">
+  {% for s in saved_sessions %}
+  <article class="session-card">
+    <div class="session-main">
+      <div class="session-title-row">
+        <h3>{{ s.exam_label }}</h3>
+        <span class="status-pill {{ s.status }}">{{ s.status|replace('_',' ')|title }}</span>
+      </div>
+      <div class="session-meta">
+        <span>{{ s.mode|title }}{% if s.mode == 'timed' %} · {{ s.duration_minutes }} min{% endif %}</span>
+        <span>{{ s.answered }}/{{ s.question_count }} answered</span>
+        {% if s.status == 'evaluated' %}<span>Score {{ s.score }}/{{ s.maximum }}</span>{% endif %}
+      </div>
+      <div class="session-selection">
+        {% if s.exam %}<span>Exam: {{ s.exam }}</span>{% endif %}
+        {% if s.content_section %}<span>Section: {{ s.content_section }}</span>{% endif %}
+        {% if s.topic %}<span>Topic: {{ s.topic }}</span>{% endif %}
+      </div>
+    </div>
+    <div class="session-actions">
+      {% if s.status == 'evaluated' %}
+        <a class="secondary" href="{{ url_for('result_view', session_id=s.session_id) }}">View result</a>
+      {% else %}
+        <a class="primary" href="{{ url_for('exam_view', session_id=s.session_id) }}">Resume</a>
+      {% endif %}
+      <form method="post" action="{{ url_for('delete_session', session_id=s.session_id) }}" onsubmit="return confirm('Delete this saved session?');">
+        <button class="ghost danger" type="submit">Delete</button>
+      </form>
+    </div>
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card empty-state"><p>No saved sessions yet. Your first exam will appear here automatically.</p></div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const exams = {{ exams|tojson }};
+const categorySelect = document.getElementById('categorySelect');
+const variantSelect = document.getElementById('variantSelect');
+const sectionSelect = document.getElementById('contentSection');
+const topicSelect = document.getElementById('topicSelect');
+const selectionMode = document.getElementById('selectionMode');
+const questionCount = document.getElementById('questionCount');
+const availability = document.getElementById('questionAvailability');
+const practicePrefill = {{ practice_prefill|tojson }};
+let selectedExam = null;
+
+if (categorySelect) {
+  const categories = Object.keys(exams);
+  categories.forEach(cat => {
+    const opt = document.createElement('option'); opt.value = cat; opt.textContent = cat; categorySelect.appendChild(opt);
+  });
+  function fillVariants() {
+    variantSelect.innerHTML = '';
+    const allOpt = document.createElement('option');
+    allOpt.value = ''; allOpt.textContent = 'All exams in this family'; variantSelect.appendChild(allOpt);
+    exams[categorySelect.value].forEach(exam => {
+      const opt = document.createElement('option');
+      opt.value = exam.variant;
+      opt.textContent = `${exam.label} (${exam.question_count} questions)`;
+      variantSelect.appendChild(opt);
+    });
+    updateFilters();
+  }
+  function fillSelect(select, values, label) {
+    select.innerHTML = `<option value="">All ${label}</option>`;
+    values.forEach(value => {
+      const opt = document.createElement('option'); opt.value = value; opt.textContent = value; select.appendChild(opt);
+    });
+  }
+  function updateFilters() {
+    const variants = exams[categorySelect.value];
+    if (!variantSelect.value) {
+      selectedExam = {sections:[...new Set(variants.flatMap(exam => exam.sections))].sort(), topics:[...new Set(variants.flatMap(exam => exam.topics))].sort(), pool:variants.flatMap(exam => exam.available.map(number => ({number, section:(exam.metadata[String(number)] || {}).section, topic:(exam.metadata[String(number)] || {}).topic, right:exam.right.includes(number), wrong:exam.wrong.includes(number)})))};
+    } else {
+      selectedExam = variants.find(exam => exam.variant === variantSelect.value);
+    }
+    fillSelect(sectionSelect, selectedExam.sections, 'sections');
+    fillSelect(topicSelect, selectedExam.topics, 'topics');
+    updateAvailability();
+  }
+  function updateAvailability() {
+    if (!selectedExam) return;
+    const section = sectionSelect.value, topic = topicSelect.value;
+    const sourcePool = selectedExam.pool || selectedExam.available.map(number => ({number, ...(selectedExam.metadata[String(number)] || {}), right:selectedExam.right.includes(number), wrong:selectedExam.wrong.includes(number)}));
+    const filteredPool = sourcePool.filter(item => {
+      return (!section || item.section === section) && (!topic || item.topic === topic);
+    });
+    const attemptedRight = filteredPool.filter(item => item.right);
+    const attemptedWrong = filteredPool.filter(item => item.wrong);
+    let pool = filteredPool;
+    if (selectionMode.value === 'incorrect') pool = attemptedWrong;
+    questionCount.max = String(Math.max(1, pool.length));
+    questionCount.value = String(Math.min(Number(questionCount.value) || pool.length, Math.max(1, pool.length)));
+    const newCount = filteredPool.length - attemptedRight.length - attemptedWrong.length;
+    availability.textContent = `Total available: ${filteredPool.length} · New: ${newCount} · Attempted right: ${attemptedRight.length} · Attempted incorrect: ${attemptedWrong.length} · Selected: ${pool.length}`;
+  }
+  categorySelect.addEventListener('change', fillVariants); variantSelect.addEventListener('change', updateFilters);
+  if (practicePrefill.category && categories.includes(practicePrefill.category)) categorySelect.value = practicePrefill.category;
+  if (practicePrefill.exam_name) document.getElementById('examName').value = practicePrefill.exam_name;
+  fillVariants();
+  if (practicePrefill.variant && [...variantSelect.options].some(option => option.value === practicePrefill.variant)) {
+    variantSelect.value = practicePrefill.variant;
+    updateFilters();
+  }
+  if (practicePrefill.section && [...sectionSelect.options].some(option => option.value === practicePrefill.section)) sectionSelect.value = practicePrefill.section;
+  if (practicePrefill.topic && [...topicSelect.options].some(option => option.value === practicePrefill.topic)) topicSelect.value = practicePrefill.topic;
+  if (['all', 'incorrect', 'incorrect_unattempted'].includes(practicePrefill.selection_mode)) selectionMode.value = practicePrefill.selection_mode;
+  if (practicePrefill.question_count) questionCount.value = practicePrefill.question_count;
+  updateAvailability();
+  [sectionSelect, topicSelect, selectionMode, questionCount].forEach(control => control.addEventListener('change', updateAvailability));
+}
+
+const slider = document.getElementById('durationSlider');
+const timerValue = document.getElementById('timerValue');
+function formatMinutes(v) {
+  v = Number(v); const h = Math.floor(v/60), m = v%60;
+  if (!h) return `${v} minutes`;
+  if (!m) return `${h} hour${h===1?'':'s'}`;
+  return `${h}h ${m}m`;
+}
+if (slider) {
+  const updateSlider = () => timerValue.textContent = formatMinutes(slider.value);
+  slider.addEventListener('input', updateSlider); updateSlider();
+}
+
+const modeInputs = document.querySelectorAll('input[name="mode"]');
+const timerConfig = document.getElementById('timerConfig');
+function updateMode() {
+  const value = document.querySelector('input[name="mode"]:checked').value;
+  timerConfig.classList.toggle('hidden', value !== 'timed');
+  document.getElementById('timedCard').classList.toggle('selected', value === 'timed');
+  document.getElementById('untimedCard').classList.toggle('selected', value === 'untimed');
+}
+modeInputs.forEach(x => x.addEventListener('change', updateMode));
+if (modeInputs.length) updateMode();
+</script>
+{% endblock %}
