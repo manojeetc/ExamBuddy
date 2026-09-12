@@ -24,9 +24,11 @@ python3 -m pip install -r requirements.txt
 python3 launcher.py
 ```
 
-## Included example
+## Local exam assets
 
-This package already contains:
+Exam question assets and answer workbooks are intentionally excluded from Git.
+After cloning the repository, create these folders locally and place your
+private exam data inside them:
 
 - `QuestionBank/AMC10/2025_A/` — 25 question images
 - `QuestionBank/AMC10/2025_B/` — 25 question images
@@ -37,6 +39,10 @@ The home screen therefore discovers:
 - `AMC10`
   - `AMC10_2025_A`
   - `AMC10_2025_B`
+
+These folders may not be present in a fresh clone until you add the assets
+locally. You can use the **Setup** tab to import a PDF into `QuestionBank`, or
+copy an existing private question bank into the same folder structure.
 
 ## How to add exams
 
@@ -74,6 +80,19 @@ QuestionBank/
 ```
 
 Images are sorted naturally by filename. Names such as `...Q01.png`, `...Q02.png`, etc. work best.
+
+### Pull requests and question assets
+
+Do not add exam PDFs, question images, answer workbooks, or saved responses to
+a pull request. They are excluded by `.gitignore` because they may contain
+copyrighted or private exam content. A pull request should contain application
+code, templates, styles, tests, documentation, and other non-exam project
+files only.
+
+When reviewing or testing a pull request, each contributor should place their
+own authorized assets locally using the structure above. The files will remain
+untracked and will not be pushed. If a feature requires a reproducible fixture,
+use synthetic or openly licensed test data instead of real exam questions.
 
 Put the matching workbook in:
 
