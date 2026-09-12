@@ -15,6 +15,11 @@ Response/
 *.webp
 *.gif
 
+# The canonical answer-key workbook is shared with the application.
+!AnswerLog/
+AnswerLog/*
+!AnswerLog/AMC10.xlsx
+
 # PyInstaller output
 build/
 dist/

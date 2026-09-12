@@ -26,9 +26,11 @@ python3 launcher.py
 
 ## Local exam assets
 
-Exam question assets and answer workbooks are intentionally excluded from Git.
-After cloning the repository, create these folders locally and place your
-private exam data inside them:
+Exam question assets and saved responses are intentionally excluded from Git.
+The canonical `AnswerLog/AMC10.xlsx` answer-key workbook is included so the
+shared example configuration works after cloning. Other local workbook
+variants remain ignored. Place any additional private exam data locally in
+the following structure:
 
 - `QuestionBank/AMC10/2025_A/` — 25 question images
 - `QuestionBank/AMC10/2025_B/` — 25 question images
@@ -83,11 +85,12 @@ Images are sorted naturally by filename. Names such as `...Q01.png`, `...Q02.png
 
 ### Pull requests and question assets
 
-Do not add exam PDFs, question images, answer workbooks, or saved responses to
-a pull request. They are excluded by `.gitignore` because they may contain
-copyrighted or private exam content. A pull request should contain application
-code, templates, styles, tests, documentation, and other non-exam project
-files only.
+Do not add exam PDFs, question images, unapproved answer workbooks, or saved
+responses to a pull request. They are excluded by `.gitignore` because they
+may contain copyrighted or private exam content. The tracked
+`AnswerLog/AMC10.xlsx` file is the intentional canonical answer-key exception.
+A pull request should otherwise contain application code, templates, styles,
+tests, documentation, and other non-exam project files only.
 
 When reviewing or testing a pull request, each contributor should place their
 own authorized assets locally using the structure above. The files will remain
