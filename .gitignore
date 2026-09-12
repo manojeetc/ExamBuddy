@@ -19,6 +19,9 @@ Response/
 !AnswerLog/
 AnswerLog/*
 !AnswerLog/AMC10.xlsx
+!Response/
+Response/*
+!Response/.gitkeep
 
 # PyInstaller output
 build/
