@@ -5,7 +5,6 @@ __pycache__/
 .DS_Store
 
 # Local exam content and answer data
-QuestionBank/
 AnswerLog/
 Response/
 *.pdf
@@ -22,6 +21,10 @@ AnswerLog/*
 !Response/
 Response/*
 !Response/.gitkeep
+
+# QuestionBank images are the intentionally published exam set.
+!QuestionBank/
+!QuestionBank/**
 
 # PyInstaller output
 build/

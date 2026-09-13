@@ -26,11 +26,11 @@ python3 launcher.py
 
 ## Local exam assets
 
-Exam question assets and saved responses are intentionally excluded from Git.
-The canonical `AnswerLog/AMC10.xlsx` answer-key workbook is included so the
+Saved responses are intentionally excluded from Git. The question bank and
+canonical `AnswerLog/AMC10.xlsx` answer-key workbook are included so the
 shared example configuration works after cloning. Other local workbook
-variants remain ignored. Place any additional private exam data locally in
-the following structure:
+variants remain ignored. Place additional exam data using the following
+structure:
 
 - `QuestionBank/AMC10/2025_A/` — 25 question images
 - `QuestionBank/AMC10/2025_B/` — 25 question images
@@ -42,9 +42,8 @@ The home screen therefore discovers:
   - `AMC10_2025_A`
   - `AMC10_2025_B`
 
-These folders may not be present in a fresh clone until you add the assets
-locally. You can use the **Setup** tab to import a PDF into `QuestionBank`, or
-copy an existing private question bank into the same folder structure.
+You can use the **Setup** tab to import a PDF into `QuestionBank`, or copy an
+additional authorized question bank into the same folder structure.
 
 ## How to add exams
 
@@ -55,6 +54,13 @@ Open **Setup**, select an exam family, enter a unique exam name such as
 coordinates to detect a complete question sequence, renders each question at
 the selected DPI, and writes the images under the normal `QuestionBank` folder
 layout. Questions that continue onto another page are stitched vertically.
+
+Setup also supports selecting a folder containing multiple PDFs. For batch
+imports, the importer first reads the PDF text to identify the exam family,
+year, and A/B form. Use descriptive filenames such as
+`AMC10_2025_A.pdf` and `AMC10_2025_B.pdf` as a fallback when the PDF title does
+not contain enough identifying information. It reports successes and failures
+separately.
 
 The importer refuses incomplete or ambiguous question sequences and does not
 overwrite an existing exam folder unless **Replace an existing exam folder** is
@@ -85,17 +91,16 @@ Images are sorted naturally by filename. Names such as `...Q01.png`, `...Q02.png
 
 ### Pull requests and question assets
 
-Do not add exam PDFs, question images, unapproved answer workbooks, or saved
-responses to a pull request. They are excluded by `.gitignore` because they
-may contain copyrighted or private exam content. The tracked
-`AnswerLog/AMC10.xlsx` file is the intentional canonical answer-key exception.
-A pull request should otherwise contain application code, templates, styles,
-tests, documentation, and other non-exam project files only.
+Do not add exam PDFs, unapproved answer workbooks, or saved responses to a pull
+request. The tracked `QuestionBank/` and `AnswerLog/AMC10.xlsx` files are the
+intentional shared exam-data set for this repository. Only add exam content
+that you are authorized to publish. Other pull-request changes should contain
+application code, templates, styles, tests, or documentation.
 
-When reviewing or testing a pull request, each contributor should place their
-own authorized assets locally using the structure above. The files will remain
-untracked and will not be pushed. If a feature requires a reproducible fixture,
-use synthetic or openly licensed test data instead of real exam questions.
+When reviewing or testing a pull request, use the tracked question bank or add
+authorized assets locally using the structure above. If a feature requires a
+new reproducible fixture, use synthetic or openly licensed test data instead of
+private exam questions.
 
 Put the matching workbook in:
 
