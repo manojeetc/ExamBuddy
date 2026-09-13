@@ -25,6 +25,8 @@ Response/*
 # QuestionBank images are the intentionally published exam set.
 !QuestionBank/
 !QuestionBank/**
+QuestionBank/.DS_Store
+QuestionBank/**/.DS_Store
 
 # PyInstaller output
 build/
