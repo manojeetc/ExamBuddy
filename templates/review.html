@@ -33,8 +33,7 @@
     </div>
     <p class="review-note">{{ item.note or "No note added." }}</p>
     <div class="review-actions">
-      {% if item.status != 'evaluated' %}<a class="secondary" href="{{ url_for('exam_view', session_id=item.session_id, question=item.question) }}">Open question</a>{% endif %}
-      {% if item.status == 'evaluated' %}<a class="primary" href="{{ url_for('result_view', session_id=item.session_id) }}">View result</a>{% endif %}
+      <a class="{% if item.status == 'evaluated' %}primary{% else %}secondary{% endif %}" href="{{ url_for('exam_view', session_id=item.session_id, question=item.question, reference=1 if item.status == 'evaluated' else None) }}">Open question</a>
       {% if item.review_status == 'needs_review' %}<button type="button" class="secondary review-complete" data-session="{{ item.session_id }}" data-question="{{ item.question }}">Mark complete</button>{% endif %}
     </div>
   </article>

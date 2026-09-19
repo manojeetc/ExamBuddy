@@ -51,6 +51,30 @@ def parse_exam_name(exam_name: str) -> ExamParts:
     return ExamParts(match.group(1).upper(), match.group(2), match.group(3).upper() if match.group(3) else None)
 
 
+def infer_exam_name_from_pdf(pdf_path: str | Path, fallback_name: str, family: str) -> str:
+    """Infer a canonical exam name from the PDF text, falling back to its filename."""
+    fallback = re.sub(r"[\s-]+", "_", Path(fallback_name).stem).upper()
+    try:
+        document = fitz.open(str(pdf_path))
+        text = "\n".join(page.get_text() for page in list(document)[:4])
+        document.close()
+    except Exception:
+        text = ""
+    compact = re.sub(r"\s+", " ", text).upper()
+    family_match = re.search(r"\b(AMC\s*(?:8|10|12))\b", compact)
+    year_match = re.search(r"\b(20\d{2})\b", compact)
+    section_match = re.search(r"\b(?:FORM|SECTION|VERSION|SET)\s*([AB])\b", compact)
+    if not section_match:
+        section_match = re.search(r"\bAMC\s*(?:8|10|12)\s*([AB])\b", compact)
+    if family_match and year_match:
+        exam_family = re.sub(r"\s+", "", family_match.group(1))
+        if exam_family == family and section_match:
+            return f"{exam_family}_{year_match.group(1)}_{section_match.group(1)}"
+        if exam_family == family:
+            return f"{exam_family}_{year_match.group(1)}"
+    return fallback
+
+
 def extract_page_text_blocks(page: Any) -> list[tuple[float, float, float, float, str]]:
     """Return words as x0, y0, x1, y1, text tuples."""
     return [(float(w[0]), float(w[1]), float(w[2]), float(w[3]), str(w[4])) for w in page.get_text("words")]

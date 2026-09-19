@@ -26,9 +26,18 @@
     </nav>
     <button class="theme-toggle" id="themeToggle" type="button" aria-label="Switch theme" title="Switch theme"><span aria-hidden="true">◐</span><span class="theme-toggle-label">Dark mode</span></button>
   </header>
-  <main class="page-shell">{% block content %}{% endblock %}</main>
+  <main class="page-shell">
+    <button class="back-control" id="backButton" type="button" aria-label="Go back">← Back</button>
+    {% block content %}{% endblock %}
+  </main>
   {% block scripts %}{% endblock %}
   <script>
+    const backButton = document.getElementById('backButton');
+    backButton.addEventListener('click', () => {
+      if (window.history.length > 1) window.history.back();
+      else window.location.href = '{{ url_for("home") }}';
+    });
+
     const themeToggle = document.getElementById('themeToggle');
     function updateThemeButton() {
       const dark = document.documentElement.dataset.theme === 'dark';

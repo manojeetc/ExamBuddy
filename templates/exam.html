@@ -17,7 +17,7 @@
       <div>
         <span class="eyebrow">QUESTION</span>
         <h1 id="questionHeading">Question 1 of {{ session.question_count }}</h1>
-        {% if session.reference_mode %}<p class="reference-notice">Reference view: answers cannot be changed.</p>{% endif %}
+        {% if session.reference_mode %}<p class="reference-notice">Reference view: answers cannot be changed, but remarks can be edited.</p>{% endif %}
       </div>
       <div class="timer-box">
         <span>{% if session.mode == 'timed' %}Time remaining{% else %}Session time{% endif %}</span>

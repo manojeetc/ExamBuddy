@@ -18,13 +18,21 @@ import xml.etree.ElementTree as ET
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, url_for
 from werkzeug.utils import secure_filename
 
-from split_exam_pdf import ExtractionError, extract_exam_questions, parse_exam_name
+from split_exam_pdf import ExtractionError, extract_exam_questions, infer_exam_name_from_pdf, parse_exam_name
 
 BASE_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 QUESTION_BANK = BASE_DIR / "QuestionBank"
 ANSWER_LOG = BASE_DIR / "AnswerLog"
 RESPONSE_DIR = BASE_DIR / "Response"
 RESPONSE_DIR.mkdir(parents=True, exist_ok=True)
+
+print(f"[ExamBuddy] Base directory: {BASE_DIR}")
+print(f"[ExamBuddy] Expected QuestionBank: {QUESTION_BANK}")
+if QUESTION_BANK.is_dir():
+    print(f"[ExamBuddy] QuestionBank found ({len(list(QUESTION_BANK.iterdir()))} top-level entries)")
+else:
+    print(f"[ExamBuddy] QuestionBank NOT FOUND: {QUESTION_BANK}")
+    print(f"[ExamBuddy] Base directory contents: {[path.name for path in BASE_DIR.iterdir()] if BASE_DIR.is_dir() else 'base directory missing'}")
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 ANSWER_CHOICES = ["A", "B", "C", "D", "E"]
@@ -628,36 +636,53 @@ def setup():
     if request.method == "POST":
         family = request.form.get("family", "").strip().upper()
         exam_name = request.form.get("exam_name", "").strip()
-        pdf = request.files.get("pdf")
+        folder_uploads = [pdf for pdf in request.files.getlist("pdfs") if pdf and pdf.filename]
+        folder_mode = bool(folder_uploads)
+        uploads = folder_uploads
+        uploads += [pdf for pdf in request.files.getlist("pdf") if pdf and pdf.filename]
         try:
             if family not in families:
                 raise ExtractionError("Choose a valid exam family.")
-            if not exam_name:
-                raise ExtractionError("Exam name is required.")
-            parts = parse_exam_name(exam_name)
-            if parts.exam_type != family:
-                raise ExtractionError(f"Exam name belongs to {parts.exam_type}; choose that exam family.")
-            if not pdf or not pdf.filename:
-                raise ExtractionError("Choose a PDF exam file.")
-            if not pdf.filename.lower().endswith(".pdf"):
-                raise ExtractionError("Only PDF files are supported.")
-            safe_name = secure_filename(pdf.filename) or "exam.pdf"
-            with tempfile.NamedTemporaryFile(prefix="exam_", suffix=".pdf", delete=False) as temporary:
-                temporary_path = Path(temporary.name)
-            try:
-                pdf.save(temporary_path)
-                result = extract_exam_questions(
-                    temporary_path,
-                    exam_name,
-                    output_root=QUESTION_BANK,
-                    expected_questions=max(1, int(request.form.get("expected_questions", "25"))),
-                    dpi=max(150, min(400, int(request.form.get("dpi", "250")))),
-                    debug=request.form.get("debug") == "on",
-                    overwrite=request.form.get("overwrite") == "on",
-                )
-                result["uploaded_file"] = safe_name
-            finally:
-                temporary_path.unlink(missing_ok=True)
+            if not uploads:
+                raise ExtractionError("Choose a PDF file or a folder containing PDF files.")
+            if len(uploads) == 1 and not exam_name and not folder_mode:
+                raise ExtractionError("Exam name is required for a single PDF.")
+            results = []
+            failures = []
+            for pdf in uploads:
+                safe_name = secure_filename(Path(pdf.filename).name) or "exam.pdf"
+                current_name = exam_name
+                try:
+                    with tempfile.NamedTemporaryFile(prefix="exam_", suffix=".pdf", delete=False) as temporary:
+                        temporary_path = Path(temporary.name)
+                    try:
+                        pdf.save(temporary_path)
+                        if folder_mode or len(uploads) > 1:
+                            current_name = infer_exam_name_from_pdf(temporary_path, safe_name, family)
+                        if not current_name:
+                            raise ExtractionError("Could not determine an exam name from this PDF.")
+                        parts = parse_exam_name(current_name)
+                        if parts.exam_type != family:
+                            raise ExtractionError(f"{current_name} belongs to {parts.exam_type}, not {family}.")
+                        imported = extract_exam_questions(
+                            temporary_path,
+                            current_name,
+                            output_root=QUESTION_BANK,
+                            expected_questions=max(1, int(request.form.get("expected_questions", "25"))),
+                            dpi=max(150, min(400, int(request.form.get("dpi", "250")))),
+                            debug=request.form.get("debug") == "on",
+                            overwrite=request.form.get("overwrite") == "on",
+                        )
+                        imported["uploaded_file"] = safe_name
+                        results.append(imported)
+                    finally:
+                        temporary_path.unlink(missing_ok=True)
+                except (ExtractionError, OSError, ValueError) as exc:
+                    failures.append({"file": safe_name, "error": str(exc)})
+            if results:
+                result = {"items": results, "failures": failures, "questions_created": sum(item["questions_created"] for item in results)}
+            if failures and not results:
+                error = "; ".join(f"{item['file']}: {item['error']}" for item in failures)
         except (ExtractionError, OSError, ValueError) as exc:
             error = str(exc)
     return render_template("setup.html", families=families, result=result, error=error)
