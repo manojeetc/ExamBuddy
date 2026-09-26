@@ -147,6 +147,14 @@ questions that took longer than the overall mean.
 
 After evaluation, the CSV is updated with the correct answer, result, and points for every question.
 
+## Read List
+
+Use the **Read List** tab to paste a public article URL. The app fetches the
+page title, description, and available headings to create a compact reading
+card. Mark an item as read, optionally record the minutes spent reading, and
+save a reflection or feedback note. Reading-list data is stored locally in
+`ReadList/read_list.json` and is ignored by Git.
+
 ## Evaluation
 
 For a 25-question `AMC10` or `AMC12` exam the app uses AMC scoring:

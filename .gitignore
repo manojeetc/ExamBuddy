@@ -14,6 +14,9 @@ Response/
 *.webp
 *.gif
 
+# Local reading queue and reflections
+ReadList/
+!ReadList/.gitkeep
 # The canonical answer-key workbook is shared with the application.
 !AnswerLog/
 AnswerLog/*

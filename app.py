@@ -11,9 +11,13 @@ import time
 import uuid
 import zipfile
 from datetime import datetime
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 import xml.etree.ElementTree as ET
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, url_for
 from werkzeug.utils import secure_filename
@@ -25,6 +29,9 @@ QUESTION_BANK = BASE_DIR / "QuestionBank"
 ANSWER_LOG = BASE_DIR / "AnswerLog"
 RESPONSE_DIR = BASE_DIR / "Response"
 RESPONSE_DIR.mkdir(parents=True, exist_ok=True)
+READ_LIST_DIR = BASE_DIR / "ReadList"
+READ_LIST_PATH = READ_LIST_DIR / "read_list.json"
+READ_LIST_DIR.mkdir(parents=True, exist_ok=True)
 
 print(f"[ExamBuddy] Base directory: {BASE_DIR}")
 print(f"[ExamBuddy] Expected QuestionBank: {QUESTION_BANK}")
@@ -46,6 +53,94 @@ app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 SESSION_LOCK = threading.Lock()
 WORKBOOK_CACHE: dict[Path, tuple[int, list[dict[str, Any]]]] = {}
 WORKBOOK_CACHE_LOCK = threading.Lock()
+
+
+class ArticleParser(HTMLParser):
+    """Extract lightweight article metadata without requiring a third-party parser."""
+
+    def __init__(self):
+        super().__init__()
+        self.title = ""
+        self.description = ""
+        self.headings: list[str] = []
+        self.paragraphs: list[str] = []
+        self._active_tag = ""
+        self._buffer: list[str] = []
+        self._meta: dict[str, str] = {}
+
+    def handle_starttag(self, tag: str, attrs):
+        attributes = dict(attrs)
+        if tag == "meta":
+            name = (attributes.get("name") or attributes.get("property") or "").lower()
+            content = (attributes.get("content") or "").strip()
+            if name and content:
+                self._meta[name] = content
+        if tag == "title" or tag in {"h1", "h2", "h3"} or tag == "p":
+            self._active_tag = tag
+            self._buffer = []
+
+    def handle_data(self, data: str):
+        if self._active_tag:
+            self._buffer.append(data)
+
+    def handle_endtag(self, tag: str):
+        if tag != self._active_tag:
+            return
+        value = re.sub(r"\s+", " ", " ".join(self._buffer)).strip()
+        if value:
+            if tag == "title":
+                self.title = value
+            elif tag in {"h1", "h2", "h3"} and value not in self.headings:
+                self.headings.append(value)
+            elif tag == "p" and len(value) >= 35:
+                self.paragraphs.append(value)
+        self._active_tag = ""
+        self._buffer = []
+
+
+def load_read_items() -> list[dict[str, Any]]:
+    if not READ_LIST_PATH.exists():
+        return []
+    try:
+        data = json.loads(READ_LIST_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def save_read_items(items: list[dict[str, Any]]) -> None:
+    READ_LIST_DIR.mkdir(parents=True, exist_ok=True)
+    READ_LIST_PATH.write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def fetch_article(url: str) -> dict[str, Any]:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("Enter a complete article URL beginning with http:// or https://.")
+    request = Request(url, headers={"User-Agent": "ExamBuddy Read List/1.0"})
+    try:
+        with urlopen(request, timeout=12) as response:
+            content_type = response.headers.get_content_type()
+            if content_type != "text/html":
+                raise ValueError("That link does not appear to be an HTML article.")
+            raw = response.read(2_000_000).decode(response.headers.get_content_charset() or "utf-8", errors="replace")
+            final_url = response.geturl()
+    except HTTPError as exc:
+        raise ValueError(f"The article could not be fetched (HTTP {exc.code}).") from exc
+    except (URLError, TimeoutError, OSError) as exc:
+        raise ValueError("The article could not be reached. Check the URL and your connection.") from exc
+
+    parser = ArticleParser()
+    parser.feed(raw)
+    title = parser.title or parser._meta.get("og:title") or parser._meta.get("twitter:title") or parsed.netloc
+    description = parser._meta.get("description") or parser._meta.get("og:description") or ""
+    summary = description or (" ".join(parser.paragraphs[:2]) if parser.paragraphs else "No summary was available from this page.")
+    return {
+        "url": final_url,
+        "title": title[:240],
+        "summary": summary[:1200],
+        "headings": parser.headings[:5],
+    }
 
 
 def now_iso() -> str:
@@ -626,6 +721,65 @@ def home():
             "exam_name": request.args.get("exam_name", "").strip(),
         },
     )
+
+
+@app.route("/read-list", methods=["GET", "POST"])
+def read_list_view():
+    error = None
+    if request.method == "POST":
+        url = request.form.get("url", "").strip()
+        if not url:
+            error = "Paste an article link to add it to your Read List."
+        else:
+            try:
+                article = fetch_article(url)
+                items = load_read_items()
+                if any(item.get("url") == article["url"] for item in items):
+                    error = "That article is already in your Read List."
+                else:
+                    article.update(
+                        {
+                            "id": uuid.uuid4().hex,
+                            "added_at": now_iso(),
+                            "read": False,
+                            "reading_minutes": "",
+                            "feedback": "",
+                        }
+                    )
+                    items.insert(0, article)
+                    with SESSION_LOCK:
+                        save_read_items(items)
+                    return redirect(url_for("read_list_view"))
+            except ValueError as exc:
+                error = str(exc)
+    items = load_read_items()
+    items.sort(key=lambda item: (item.get("read", False), item.get("added_at", "")), reverse=False)
+    return render_template("read_list.html", items=items, error=error)
+
+
+@app.post("/read-list/<item_id>")
+def update_read_item(item_id: str):
+    items = load_read_items()
+    item = next((entry for entry in items if entry.get("id") == item_id), None)
+    if not item:
+        abort(404, "Read list item not found")
+    item["read"] = request.form.get("read") == "on"
+    item["reading_minutes"] = request.form.get("reading_minutes", "").strip()[:10]
+    item["feedback"] = request.form.get("feedback", "").strip()[:3000]
+    with SESSION_LOCK:
+        save_read_items(items)
+    return redirect(url_for("read_list_view"))
+
+
+@app.post("/read-list/<item_id>/delete")
+def delete_read_item(item_id: str):
+    items = load_read_items()
+    remaining = [item for item in items if item.get("id") != item_id]
+    if len(remaining) == len(items):
+        abort(404, "Read list item not found")
+    with SESSION_LOCK:
+        save_read_items(remaining)
+    return redirect(url_for("read_list_view"))
 
 
 @app.route("/setup", methods=["GET", "POST"])

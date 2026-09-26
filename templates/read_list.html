@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Read List · ExamBuddy{% endblock %}
+{% block content %}
+<section class="hero read-list-hero">
+  <div><span class="eyebrow">CURATED READING</span><h1>Read List</h1><p>Turn useful articles into a thoughtful queue, then keep a record of what stayed with you.</p></div>
+  <div class="read-list-count"><strong>{{ items|selectattr('read', 'equalto', true)|list|length }}</strong><span>of {{ items|length }} read</span></div>
+</section>
+
+<section class="card read-add-card">
+  <div class="section-heading compact"><div><span class="eyebrow">ADD AN ARTICLE</span><h2>Bring something worth reading</h2><p class="muted">Paste a public article link and ExamBuddy will pull its title, description, and key headings.</p></div></div>
+  {% if error %}<div class="notice error">{{ error }}</div>{% endif %}
+  <form class="read-add-form" method="post" action="{{ url_for('read_list_view') }}">
+    <label for="articleUrl"><span>Article link</span><input id="articleUrl" name="url" type="url" required placeholder="https://example.com/article"></label>
+    <button class="primary" type="submit">Add to Read List</button>
+  </form>
+</section>
+
+{% if items %}
+<section class="read-list-grid">
+  {% for item in items %}
+  <article class="read-item{% if item.read %} read-item-complete{% endif %}">
+    <div class="read-item-row">
+      <div class="read-item-title"><h2>{{ item.title }}</h2><a class="read-source" href="{{ item.url }}" target="_blank" rel="noopener">{{ item.url }}</a></div>
+      {% if item.read %}<span class="read-status">Read</span>{% else %}<form class="read-row-toggle" method="post" action="{{ url_for('update_read_item', item_id=item.id) }}"><input type="hidden" name="reading_minutes" value="{{ item.reading_minutes }}"><input type="hidden" name="feedback" value="{{ item.feedback }}"><button class="secondary" type="submit" name="read" value="on">Mark as read</button></form>{% endif %}
+      <div class="read-item-actions"><form method="post" action="{{ url_for('delete_read_item', item_id=item.id) }}"><button class="ghost danger" type="submit">Remove</button></form></div>
+    </div>
+    <details class="read-details" id="read-details-{{ item.id }}">
+      <summary>Article details</summary>
+      <p class="read-summary">{{ item.summary }}</p>
+      {% if item.headings %}<div class="read-headings"><span>Key sections</span>{% for heading in item.headings %}<b>{{ heading }}</b>{% endfor %}</div>{% endif %}
+      <form class="read-reflection" method="post" action="{{ url_for('update_read_item', item_id=item.id) }}">
+        <label class="read-check"><input type="checkbox" name="read" {% if item.read %}checked{% endif %}> Mark as read</label>
+        <label><span>Reading time (minutes, optional)</span><input name="reading_minutes" type="number" min="1" max="999" value="{{ item.reading_minutes }}" placeholder="e.g. 20"></label>
+        <label><span>Reflection or feedback (optional)</span><textarea name="feedback" rows="3" maxlength="3000" placeholder="What was useful, surprising, or worth revisiting?">{{ item.feedback }}</textarea></label>
+        <div class="read-item-actions"><button class="secondary" type="submit">Save progress</button></div>
+      </form>
+    </details>
+  </article>
+  {% endfor %}
+</section>
+{% else %}
+<section class="card empty-state read-empty"><h2>Your reading queue is clear</h2><p>Add an article above to start building a considered list.</p></section>
+{% endif %}
+{% endblock %}

@@ -22,6 +22,7 @@
       <a class="{% if request.endpoint == 'home' %}active{% endif %}" href="{{ url_for('home') }}">Practice</a>
       <a class="{% if request.endpoint == 'analyze' %}active{% endif %}" href="{{ url_for('analyze') }}">Analyze</a>
       <a class="{% if request.endpoint == 'review_view' %}active{% endif %}" href="{{ url_for('review_view') }}">Review</a>
+      <a class="{% if request.endpoint in ['read_list_view', 'update_read_item'] %}active{% endif %}" href="{{ url_for('read_list_view') }}">Read List</a>
       <a class="{% if request.endpoint == 'setup' %}active{% endif %}" href="{{ url_for('setup') }}">Setup</a>
     </nav>
     <button class="theme-toggle" id="themeToggle" type="button" aria-label="Switch theme" title="Switch theme"><span aria-hidden="true">◐</span><span class="theme-toggle-label">Dark mode</span></button>
