@@ -26,8 +26,18 @@ from split_exam_pdf import ExtractionError, extract_exam_questions, infer_exam_n
 import storage
 
 BASE_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
-QUESTION_BANK = BASE_DIR / "QuestionBank"
-ANSWER_LOG = BASE_DIR / "AnswerLog"
+RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR))
+
+
+def data_path(name: str) -> Path:
+    external_path = BASE_DIR / name
+    if external_path.exists() or RESOURCE_DIR == BASE_DIR:
+        return external_path
+    return RESOURCE_DIR / name
+
+
+QUESTION_BANK = data_path("QuestionBank")
+ANSWER_LOG = data_path("AnswerLog")
 RESPONSE_DIR = BASE_DIR / "Response"
 RESPONSE_DIR.mkdir(parents=True, exist_ok=True)
 READ_LIST_DIR = BASE_DIR / "ReadList"

@@ -22,11 +22,14 @@ except ImportError:  # psycopg2-binary is only required for the supabase backend
     psycopg2 = None
 
 BASE_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR))
 DEFAULT_USER = "Panda1"
 
 
 def _load_dotenv() -> None:
     env_path = BASE_DIR / ".env"
+    if not env_path.exists() and RESOURCE_DIR != BASE_DIR:
+        env_path = RESOURCE_DIR / ".env"
     if not env_path.exists():
         return
     for line in env_path.read_text(encoding="utf-8").splitlines():
@@ -96,7 +99,7 @@ def get_cursor(commit: bool = False):
 
 def ensure_schema() -> None:
     """Create tables/views/triggers if missing and seed the single app user."""
-    schema_sql = (BASE_DIR / "supabase" / "schema.sql").read_text(encoding="utf-8")
+    schema_sql = (RESOURCE_DIR / "supabase" / "schema.sql").read_text(encoding="utf-8")
     with get_cursor(commit=True) as cur:
         cur.execute(schema_sql)
         cur.execute(
