@@ -19,10 +19,11 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, url_for
+from flask import Flask, abort, g, jsonify, redirect, render_template, request, send_file, url_for
 from werkzeug.utils import secure_filename
 
 from split_exam_pdf import ExtractionError, extract_exam_questions, infer_exam_name_from_pdf, parse_exam_name
+import storage
 
 BASE_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 QUESTION_BANK = BASE_DIR / "QuestionBank"
@@ -40,6 +41,15 @@ if QUESTION_BANK.is_dir():
 else:
     print(f"[ExamBuddy] QuestionBank NOT FOUND: {QUESTION_BANK}")
     print(f"[ExamBuddy] Base directory contents: {[path.name for path in BASE_DIR.iterdir()] if BASE_DIR.is_dir() else 'base directory missing'}")
+
+print(f"[ExamBuddy] Storage backend: {storage.STORAGE_BACKEND}")
+if storage.STORAGE_BACKEND == "supabase":
+    try:
+        storage.ensure_schema()
+        print("[ExamBuddy] Supabase schema is ready and the 'Panda1' user is seeded.")
+    except Exception as exc:
+        print(f"[ExamBuddy] Supabase schema setup FAILED: {exc}")
+        print("[ExamBuddy] Requests that read or write exam sessions / Read List will fail until this is resolved.")
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 ANSWER_CHOICES = ["A", "B", "C", "D", "E"]
@@ -99,6 +109,8 @@ class ArticleParser(HTMLParser):
 
 
 def load_read_items() -> list[dict[str, Any]]:
+    if storage.STORAGE_BACKEND == "supabase":
+        return storage.fetch_read_items()
     if not READ_LIST_PATH.exists():
         return []
     try:
@@ -108,9 +120,43 @@ def load_read_items() -> list[dict[str, Any]]:
     return data if isinstance(data, list) else []
 
 
-def save_read_items(items: list[dict[str, Any]]) -> None:
+def _file_save_read_items(items: list[dict[str, Any]]) -> None:
     READ_LIST_DIR.mkdir(parents=True, exist_ok=True)
     READ_LIST_PATH.write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def create_read_item(article: dict[str, Any]) -> None:
+    if storage.STORAGE_BACKEND == "supabase":
+        storage.insert_read_item(article)
+        return
+    items = load_read_items()
+    items.insert(0, article)
+    _file_save_read_items(items)
+
+
+def apply_read_item_update(item_id: str, read: bool, reading_minutes: str, feedback: str) -> bool:
+    if storage.STORAGE_BACKEND == "supabase":
+        return storage.update_read_item_record(item_id, read, reading_minutes, feedback)
+    items = load_read_items()
+    item = next((entry for entry in items if entry.get("id") == item_id), None)
+    if not item:
+        return False
+    item["read"] = read
+    item["reading_minutes"] = reading_minutes
+    item["feedback"] = feedback
+    _file_save_read_items(items)
+    return True
+
+
+def remove_read_item(item_id: str) -> bool:
+    if storage.STORAGE_BACKEND == "supabase":
+        return storage.delete_read_item_record(item_id)
+    items = load_read_items()
+    remaining = [item for item in items if item.get("id") != item_id]
+    if len(remaining) == len(items):
+        return False
+    _file_save_read_items(remaining)
+    return True
 
 
 def fetch_article(url: str) -> dict[str, Any]:
@@ -315,7 +361,7 @@ def parse_variant(category: str, folder_name: str) -> tuple[str | None, str | No
     return year, section, label
 
 
-def scan_exams() -> dict[str, list[dict[str, Any]]]:
+def _scan_exams_uncached() -> dict[str, list[dict[str, Any]]]:
     exams: dict[str, list[dict[str, Any]]] = {}
     if not QUESTION_BANK.exists():
         return exams
@@ -344,6 +390,20 @@ def scan_exams() -> dict[str, list[dict[str, Any]]]:
             )
         if variants:
             exams[category_dir.name] = variants
+    return exams
+
+
+def scan_exams() -> dict[str, list[dict[str, Any]]]:
+    """Cached per-request: this walks the whole QuestionBank tree, and a
+    single /analyze request previously triggered it 5-10+ times (once per
+    exam family plus once per evaluated session via find_exam)."""
+    cached = getattr(g, "_scan_exams_cache", None)
+    if cached is not None:
+        return cached
+    t0 = time.perf_counter()
+    exams = _scan_exams_uncached()
+    print(f"[ExamBuddy] scan_exams() scanned QuestionBank in {(time.perf_counter() - t0) * 1000:.1f}ms")
+    g._scan_exams_cache = exams
     return exams
 
 
@@ -436,11 +496,7 @@ def session_question_pool(session: dict[str, Any]) -> list[dict[str, Any]]:
 def practice_question_stats(category: str, variant: str) -> tuple[set[int], set[int]]:
     right: set[int] = set()
     wrong: set[int] = set()
-    for path in RESPONSE_DIR.glob("*.json"):
-        try:
-            session = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
+    for session in iter_all_sessions():
         if session.get("status") != "evaluated" or session.get("category") != category or session.get("variant") != variant:
             continue
         for detail in session.get("evaluation", {}).get("details", []):
@@ -544,7 +600,37 @@ def make_session_id(label: str) -> str:
     return f"{safe_label}_{stamp}_{uuid.uuid4().hex[:6]}"
 
 
+def iter_all_sessions() -> list[dict[str, Any]]:
+    """Return every saved session as a raw dict, regardless of storage backend.
+
+    Cached per-request: home() alone can call this once per exam variant plus
+    once for the saved-session list, and each call is a remote round trip
+    against Supabase, so re-fetching every time made page loads very slow.
+    """
+    cached = getattr(g, "_all_sessions_cache", None)
+    if cached is not None:
+        return cached
+    t0 = time.perf_counter()
+    if storage.STORAGE_BACKEND == "supabase":
+        sessions = storage.fetch_all_sessions()
+    else:
+        sessions = []
+        for path in RESPONSE_DIR.glob("*.json"):
+            try:
+                sessions.append(json.loads(path.read_text(encoding="utf-8")))
+            except Exception:
+                continue
+    print(f"[ExamBuddy] iter_all_sessions() loaded {len(sessions)} session(s) in {(time.perf_counter() - t0) * 1000:.1f}ms ({storage.STORAGE_BACKEND})")
+    g._all_sessions_cache = sessions
+    return sessions
+
+
 def load_session(session_id: str) -> dict[str, Any]:
+    if storage.STORAGE_BACKEND == "supabase":
+        session = storage.fetch_session(session_id)
+        if session is None:
+            abort(404, "Saved session not found")
+        return session
     path = session_json_path(session_id)
     if not path.exists():
         abort(404, "Saved session not found")
@@ -556,6 +642,9 @@ def load_session(session_id: str) -> dict[str, Any]:
 
 def save_session(session: dict[str, Any]) -> None:
     session["updated_at"] = now_iso()
+    if storage.STORAGE_BACKEND == "supabase":
+        storage.save_session_record(session)
+        return
     json_path = session_json_path(session["session_id"])
     tmp_path = json_path.with_suffix(".json.tmp")
     tmp_path.write_text(json.dumps(session, indent=2), encoding="utf-8")
@@ -604,14 +693,10 @@ def write_session_csv(session: dict[str, Any]) -> None:
 
 def list_saved_sessions() -> list[dict[str, Any]]:
     items = []
-    for path in RESPONSE_DIR.glob("*.json"):
-        try:
-            s = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
+    for s in iter_all_sessions():
         items.append(
             {
-                "session_id": s.get("session_id", path.stem),
+                "session_id": s.get("session_id", ""),
                 "exam_label": s.get("exam_label", "Unknown exam"),
                 "exam_family": s.get("exam_family", s.get("category", "")),
                 "exam": s.get("exam", s.get("variant", "")),
@@ -692,6 +777,7 @@ def evaluate_session(session: dict[str, Any]) -> dict[str, Any]:
 
 @app.get("/")
 def home():
+    t0 = time.perf_counter()
     exams = scan_exams()
     serializable = {
         category: [
@@ -707,10 +793,12 @@ def home():
         ]
         for category, variants in exams.items()
     }
+    saved_sessions = list_saved_sessions()
+    print(f"[ExamBuddy] home() rendered in {(time.perf_counter() - t0) * 1000:.1f}ms")
     return render_template(
         "index.html",
         exams=serializable,
-        saved_sessions=list_saved_sessions(),
+        saved_sessions=saved_sessions,
         practice_prefill={
             "category": request.args.get("category", "").strip(),
             "variant": request.args.get("variant", "").strip(),
@@ -739,16 +827,15 @@ def read_list_view():
                 else:
                     article.update(
                         {
-                            "id": uuid.uuid4().hex,
+                            "id": storage.new_read_item_id(),
                             "added_at": now_iso(),
                             "read": False,
                             "reading_minutes": "",
                             "feedback": "",
                         }
                     )
-                    items.insert(0, article)
                     with SESSION_LOCK:
-                        save_read_items(items)
+                        create_read_item(article)
                     return redirect(url_for("read_list_view"))
             except ValueError as exc:
                 error = str(exc)
@@ -759,26 +846,22 @@ def read_list_view():
 
 @app.post("/read-list/<item_id>")
 def update_read_item(item_id: str):
-    items = load_read_items()
-    item = next((entry for entry in items if entry.get("id") == item_id), None)
-    if not item:
-        abort(404, "Read list item not found")
-    item["read"] = request.form.get("read") == "on"
-    item["reading_minutes"] = request.form.get("reading_minutes", "").strip()[:10]
-    item["feedback"] = request.form.get("feedback", "").strip()[:3000]
+    read = request.form.get("read") == "on"
+    reading_minutes = request.form.get("reading_minutes", "").strip()[:10]
+    feedback = request.form.get("feedback", "").strip()[:3000]
     with SESSION_LOCK:
-        save_read_items(items)
+        found = apply_read_item_update(item_id, read, reading_minutes, feedback)
+    if not found:
+        abort(404, "Read list item not found")
     return redirect(url_for("read_list_view"))
 
 
 @app.post("/read-list/<item_id>/delete")
 def delete_read_item(item_id: str):
-    items = load_read_items()
-    remaining = [item for item in items if item.get("id") != item_id]
-    if len(remaining) == len(items):
-        abort(404, "Read list item not found")
     with SESSION_LOCK:
-        save_read_items(remaining)
+        found = remove_read_item(item_id)
+    if not found:
+        abort(404, "Read list item not found")
     return redirect(url_for("read_list_view"))
 
 
@@ -872,15 +955,11 @@ def analyze():
             stats = collection.setdefault(key, {"available": 0, "evaluated": 0, "correct": 0})
             stats["available"] += 1
 
-    for path in RESPONSE_DIR.glob("*.json"):
-        try:
-            session = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
+    for session in iter_all_sessions():
         if session.get("status") == "in_progress" and (not selected_family or session.get("category") == selected_family):
             active_sessions.append(
                 {
-                    "session_id": session.get("session_id", path.stem),
+                    "session_id": session.get("session_id", ""),
                     "exam_label": session.get("exam_label", "Unknown exam"),
                     "answered": sum(1 for response in session.get("responses", {}).values() if response.get("answer")),
                     "question_count": session.get("question_count", 0),
@@ -935,7 +1014,7 @@ def analyze():
             timed_questions.append(
                 {
                     "exam_label": session.get("exam_label", "Unknown exam"),
-                    "session_id": session.get("session_id", path.stem),
+                    "session_id": session.get("session_id", ""),
                     "question": question,
                     "section": info.get("section", "Uncategorized"),
                     "topic": info.get("topic", "Uncategorized"),
@@ -1261,11 +1340,7 @@ def review_view():
     query = request.args.get("q", "").strip().lower()
     show_completed = request.args.get("completed", "") == "1"
     items = []
-    for path in RESPONSE_DIR.glob("*.json"):
-        try:
-            session = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
+    for session in iter_all_sessions():
         for question, response in session.get("responses", {}).items():
             review_status = response.get("review_status") or ("needs_review" if response.get("review") else "not_flagged")
             if review_status == "not_flagged":
@@ -1285,7 +1360,7 @@ def review_view():
                 continue
             items.append(
                 {
-                    "session_id": session.get("session_id", path.stem),
+                    "session_id": session.get("session_id", ""),
                     "exam_label": session.get("exam_label", "Unknown exam"),
                     "category": session.get("category", ""),
                     "variant": session.get("variant", "All exams"),
@@ -1366,15 +1441,35 @@ def retake(session_id: str):
 def delete_session(session_id: str):
     safe_session_id(session_id)
     with SESSION_LOCK:
-        for path in (session_json_path(session_id), session_csv_path(session_id)):
-            if path.exists():
-                path.unlink()
+        if storage.STORAGE_BACKEND == "supabase":
+            storage.delete_session_record(session_id)
+        else:
+            for path in (session_json_path(session_id), session_csv_path(session_id)):
+                if path.exists():
+                    path.unlink()
     return redirect(url_for("home"))
 
 
 @app.get("/health")
 def health():
     return jsonify({"ok": True, "exams": sum(len(v) for v in scan_exams().values())})
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(exc: Exception):
+    # Flask's default 500 page shows no detail. Log the real traceback so
+    # errors (e.g. a transient Supabase connection issue) are diagnosable
+    # from the terminal instead of only showing a blank "Internal Server Error".
+    from werkzeug.exceptions import HTTPException
+    if isinstance(exc, HTTPException):
+        return exc
+    import traceback
+    print(f"[ExamBuddy] Unhandled error on {request.method} {request.path}:")
+    traceback.print_exc()
+    message = "Something went wrong processing that request. Check the terminal for details."
+    if isinstance(exc, storage.StorageConfigError):
+        message = str(exc)
+    return render_template("error.html", message=message), 500
 
 
 if __name__ == "__main__":

@@ -21,7 +21,10 @@
   <article class="read-item{% if item.read %} read-item-complete{% endif %}">
     <div class="read-item-row">
       <div class="read-item-title"><h2>{{ item.title }}</h2><a class="read-source" href="{{ item.url }}" target="_blank" rel="noopener">{{ item.url }}</a></div>
-      {% if item.read %}<span class="read-status">Read</span>{% else %}<form class="read-row-toggle" method="post" action="{{ url_for('update_read_item', item_id=item.id) }}"><input type="hidden" name="reading_minutes" value="{{ item.reading_minutes }}"><input type="hidden" name="feedback" value="{{ item.feedback }}"><button class="secondary" type="submit" name="read" value="on">Mark as read</button></form>{% endif %}
+      <div class="read-status-group">
+        <span class="read-status{% if not item.read %} hidden{% endif %}">Read</span>
+        <button type="button" class="secondary read-toggle-btn" data-id="{{ item.id }}" data-read="{{ 'true' if item.read else 'false' }}" data-minutes="{{ item.reading_minutes }}" data-feedback="{{ item.feedback }}">{% if item.read %}Mark as unread{% else %}Mark as read{% endif %}</button>
+      </div>
       <div class="read-item-actions"><form method="post" action="{{ url_for('delete_read_item', item_id=item.id) }}"><button class="ghost danger" type="submit">Remove</button></form></div>
     </div>
     <details class="read-details" id="read-details-{{ item.id }}">
@@ -41,4 +44,33 @@
 {% else %}
 <section class="card empty-state read-empty"><h2>Your reading queue is clear</h2><p>Add an article above to start building a considered list.</p></section>
 {% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll('.read-toggle-btn').forEach(button => {
+  button.addEventListener('click', async () => {
+    const nowRead = button.dataset.read !== 'true';
+    button.disabled = true;
+    const response = await fetch(`/read-list/${button.dataset.id}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: new URLSearchParams({
+        read: nowRead ? 'on' : '',
+        reading_minutes: button.dataset.minutes || '',
+        feedback: button.dataset.feedback || '',
+      }),
+    });
+    if (response.ok) {
+      const article = button.closest('.read-item');
+      article.classList.toggle('read-item-complete', nowRead);
+      article.querySelector('.read-status').classList.toggle('hidden', !nowRead);
+      const checkbox = article.querySelector('.read-reflection input[name="read"]');
+      if (checkbox) checkbox.checked = nowRead;
+      button.dataset.read = nowRead ? 'true' : 'false';
+      button.textContent = nowRead ? 'Mark as unread' : 'Mark as read';
+    }
+    button.disabled = false;
+  });
+});
+</script>
 {% endblock %}

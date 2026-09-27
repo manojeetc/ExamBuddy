@@ -2,3 +2,4 @@ Flask>=3.0,<4
 flaskwebgui==1.1.7
 PyMuPDF>=1.24,<2
 Pillow>=10,<12
+psycopg2-binary>=2.9,<3

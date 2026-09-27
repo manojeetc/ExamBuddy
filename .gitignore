@@ -35,3 +35,8 @@ QuestionBank/**/.DS_Store
 build/
 dist/
 *.spec
+
+# Local secrets (Supabase connection string, etc.)
+.env
+.env.*
+!.env.example

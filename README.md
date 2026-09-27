@@ -152,8 +152,37 @@ After evaluation, the CSV is updated with the correct answer, result, and points
 Use the **Read List** tab to paste a public article URL. The app fetches the
 page title, description, and available headings to create a compact reading
 card. Mark an item as read, optionally record the minutes spent reading, and
-save a reflection or feedback note. Reading-list data is stored locally in
-`ReadList/read_list.json` and is ignored by Git.
+save a reflection or feedback note. Reading-list data follows the same
+storage backend as exam sessions (see below).
+
+## Storage backend: CSV or Supabase
+
+Copy `.env.example` to `.env` and set `STORAGE_BACKEND`:
+
+- `STORAGE_BACKEND=csv` (default) — exam sessions live in `Response/*.json` +
+  `Response/*.csv`, and the Read List lives in `ReadList/read_list.json`.
+- `STORAGE_BACKEND=supabase` — exam sessions and the Read List are stored in
+  Postgres tables instead, using `SUPABASE_DB_URL` for the connection. The
+  schema (`supabase/schema.sql`) is applied automatically on startup, so no
+  manual `psql` step is required. Every row belongs to the single application
+  user `Panda1` (see `supabase/schema.sql`).
+
+`SUPABASE_DB_URL` must be a direct Postgres connection string. If the
+hostname does not resolve (`db.<project-ref>.supabase.co`), use the
+**Connection pooling** string from the Supabase dashboard's *Connect* dialog
+instead — it uses a different, IPv4-reachable hostname.
+
+To move existing local data into Supabase, set `SUPABASE_DB_URL` in `.env`
+(before or after switching `STORAGE_BACKEND`) and run:
+
+```bash
+python3 migrate_to_supabase.py
+```
+
+This creates the tables if needed, then upserts every session in `Response/`
+and every article in `ReadList/read_list.json`. It is safe to re-run.
+
+Never commit `.env` — it holds a live database password.
 
 ## Evaluation
 
