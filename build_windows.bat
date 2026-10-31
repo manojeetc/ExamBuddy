@@ -17,12 +17,8 @@ echo Installing application and packaging dependencies...
 
 echo Building AMC Exam Practice...
 %PY% -m PyInstaller --noconfirm --clean --onedir --windowed --name AMCExamPractice ^
-  --add-data "QuestionBank;QuestionBank" ^
-  --add-data "AnswerLog;AnswerLog" ^
-  --add-data "Response;Response" ^
   --add-data "templates;templates" ^
   --add-data "static;static" ^
-  --add-data "supabase;supabase" ^
   launcher.py
 
 if errorlevel 1 (
@@ -30,6 +26,10 @@ if errorlevel 1 (
   exit /b 1
 )
 
+rem The app resolves these next to the exe (not in _internal), and they must stay writable.
+for %%D in (QuestionBank AnswerLog Response supabase) do (
+  if exist "%%D" robocopy "%%D" "dist\AMCExamPractice\%%D" /E /NFL /NDL /NJH /NJS /NP >nul
+)
 if exist ".env" copy /Y ".env" "dist\AMCExamPractice\.env" >nul
 
 echo.
