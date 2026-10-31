@@ -21,6 +21,7 @@
         <span>Exam</span>
         <select name="variant" id="variantSelect"></select>
       </label>
+      <label class="check-row full-width"><input type="checkbox" id="hideTakenCheck"> Show untaken exams only</label>
       <label>
         <span>Exam name <b class="required-marker">*</b></span>
         <input type="text" name="exam_name" id="examName" placeholder="My practice set" value="{{ practice_prefill.exam_name }}" required aria-required="true">
@@ -137,6 +138,7 @@ const topicSelect = document.getElementById('topicSelect');
 const selectionMode = document.getElementById('selectionMode');
 const questionCount = document.getElementById('questionCount');
 const availability = document.getElementById('questionAvailability');
+const hideTakenCheck = document.getElementById('hideTakenCheck');
 const practicePrefill = {{ practice_prefill|tojson }};
 let selectedExam = null;
 
@@ -146,15 +148,24 @@ if (categorySelect) {
     const opt = document.createElement('option'); opt.value = cat; opt.textContent = cat; categorySelect.appendChild(opt);
   });
   function fillVariants() {
+    const previousVariant = variantSelect.value;
+    const dark = document.documentElement.dataset.theme === 'dark';
     variantSelect.innerHTML = '';
     const allOpt = document.createElement('option');
     allOpt.value = ''; allOpt.textContent = 'All exams in this family'; variantSelect.appendChild(allOpt);
-    exams[categorySelect.value].forEach(exam => {
+    exams[categorySelect.value].filter(exam => !hideTakenCheck.checked || !exam.taken).forEach(exam => {
       const opt = document.createElement('option');
       opt.value = exam.variant;
-      opt.textContent = `${exam.label} (${exam.question_count} questions)`;
+      opt.textContent = `${exam.label} (${exam.question_count} questions)${exam.taken ? ' (taken)' : ''}`;
+      if (exam.taken) {
+        // Native <select> popups mostly ignore stylesheet rules for <option>;
+        // only inline style reliably changes their background across browsers.
+        opt.style.backgroundColor = dark ? '#42301e' : '#fff6ed';
+        opt.style.color = dark ? '#f2b66d' : '#7a4a12';
+      }
       variantSelect.appendChild(opt);
     });
+    if ([...variantSelect.options].some(option => option.value === previousVariant)) variantSelect.value = previousVariant;
     updateFilters();
   }
   function fillSelect(select, values, label) {
@@ -191,6 +202,7 @@ if (categorySelect) {
     availability.textContent = `Total available: ${filteredPool.length} · New: ${newCount} · Attempted right: ${attemptedRight.length} · Attempted incorrect: ${attemptedWrong.length} · Selected: ${pool.length}`;
   }
   categorySelect.addEventListener('change', fillVariants); variantSelect.addEventListener('change', updateFilters);
+  hideTakenCheck.addEventListener('change', fillVariants);
   if (practicePrefill.category && categories.includes(practicePrefill.category)) categorySelect.value = practicePrefill.category;
   if (practicePrefill.exam_name) document.getElementById('examName').value = practicePrefill.exam_name;
   fillVariants();

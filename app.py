@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 import xml.etree.ElementTree as ET
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from flask import Flask, abort, g, jsonify, redirect, render_template, request, send_file, url_for
@@ -134,16 +134,22 @@ def create_read_item(article: dict[str, Any]) -> None:
     _file_save_read_items(items)
 
 
-def apply_read_item_update(item_id: str, read: bool, reading_minutes: str, feedback: str) -> bool:
+def apply_read_item_update(item_id: str, read: bool, reading_minutes: str, feedback: str, cover_url: str = "", read_date: str = "") -> bool:
     if storage.STORAGE_BACKEND == "supabase":
-        return storage.update_read_item_record(item_id, read, reading_minutes, feedback)
+        return storage.update_read_item_record(item_id, read, reading_minutes, feedback, cover_url, read_date)
     items = load_read_items()
     item = next((entry for entry in items if entry.get("id") == item_id), None)
     if not item:
         return False
     item["read"] = read
+    if read:
+        item["read_at"] = read_date or item.get("read_at") or now_iso()
+    else:
+        item["read_at"] = ""
     item["reading_minutes"] = reading_minutes
     item["feedback"] = feedback
+    if cover_url:
+        item["cover_url"] = cover_url
     _file_save_read_items(items)
     return True
 
@@ -189,8 +195,98 @@ def fetch_article(url: str) -> dict[str, Any]:
     }
 
 
+def _fetch_google_books_cover(title: str, author: str) -> str:
+    """Fallback cover lookup via the public Google Books API (no key needed)."""
+    query = urlencode({"q": f"intitle:{title} inauthor:{author}", "maxResults": 5})
+    request = Request(f"https://www.googleapis.com/books/v1/volumes?{query}", headers={"User-Agent": "ExamBuddy Read List/1.0"})
+    try:
+        with urlopen(request, timeout=12) as response:
+            data = json.loads(response.read(500_000).decode("utf-8", errors="replace"))
+    except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError):
+        return ""
+    for item in data.get("items") or []:
+        image_links = item.get("volumeInfo", {}).get("imageLinks") or {}
+        thumbnail = image_links.get("thumbnail") or image_links.get("smallThumbnail")
+        if thumbnail:
+            return thumbnail.replace("http://", "https://")
+    return ""
+
+
+def _name_tokens(value: str) -> set[str]:
+    return set(re.findall(r"[a-z]+", str(value or "").lower()))
+
+
+def fetch_book_cover(title: str, author: str) -> dict[str, Any]:
+    """Look up a book and return a canonical title/author plus a cover image
+    URL when one is available. Open Library's combined title+author search is
+    strict and fails on small author-name variations, so this searches by
+    title alone, ranks results by author token overlap, then tries Open
+    Library covers (by cover id, then ISBN) before falling back to Google
+    Books. No API key is required for either service."""
+    query = urlencode({"title": title, "limit": 10})
+    request = Request(f"https://openlibrary.org/search.json?{query}", headers={"User-Agent": "ExamBuddy Read List/1.0"})
+    try:
+        with urlopen(request, timeout=12) as response:
+            data = json.loads(response.read(500_000).decode("utf-8", errors="replace"))
+    except HTTPError as exc:
+        raise ValueError(f"Book lookup failed (HTTP {exc.code}).") from exc
+    except (URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        raise ValueError("Book lookup failed. Check your connection and try again.") from exc
+
+    docs = data.get("docs") or []
+    if not docs:
+        cover_url = _fetch_google_books_cover(title, author)
+        if not cover_url:
+            raise ValueError("No book matched that title. Check the spelling and try again.")
+        return {"title": title[:240], "author": author[:240], "cover_url": cover_url}
+
+    author_tokens = _name_tokens(author)
+
+    def author_score(doc: dict[str, Any]) -> int:
+        doc_tokens: set[str] = set()
+        for name in doc.get("author_name") or []:
+            doc_tokens |= _name_tokens(name)
+        return len(author_tokens & doc_tokens)
+
+    docs_ranked = sorted(docs, key=author_score, reverse=True)
+    primary = docs_ranked[0]
+    resolved_title = str(primary.get("title") or title).strip()[:240]
+    resolved_author = ", ".join(primary.get("author_name") or []) or author
+    cover_url = ""
+
+    cover_doc = next((doc for doc in docs_ranked if doc.get("cover_i")), None)
+    if cover_doc:
+        cover_url = f"https://covers.openlibrary.org/b/id/{cover_doc['cover_i']}-L.jpg"
+    else:
+        isbn_doc = next((doc for doc in docs_ranked if doc.get("isbn")), None)
+        if isbn_doc:
+            cover_url = f"https://covers.openlibrary.org/b/isbn/{isbn_doc['isbn'][0]}-L.jpg"
+
+    if not cover_url:
+        cover_url = _fetch_google_books_cover(resolved_title, resolved_author)
+
+    return {
+        "title": resolved_title or title,
+        "author": str(resolved_author).strip()[:240],
+        "cover_url": cover_url,
+    }
+
+
+
 def now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _parse_read_date(value: str) -> str:
+    """Validate a user-supplied YYYY-MM-DD date and return it, or '' if invalid/blank."""
+    value = (value or "").strip()
+    if not value:
+        return ""
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return ""
+    return value
 
 
 def normalize(value: Any) -> str:
@@ -418,65 +514,92 @@ def find_exam(category: str, variant: str) -> dict[str, Any] | None:
     )
 
 
-def find_answer_row(category: str, year: str | None, section: str | None) -> tuple[dict[str, Any] | None, Path | None]:
-    preferred = ANSWER_LOG / f"{category}.xlsx"
-    workbooks = [preferred] if preferred.exists() else []
-    workbooks += [p for p in sorted(ANSWER_LOG.glob("*.xlsx")) if p != preferred]
+def _answer_rows_for_family(category: str) -> tuple[list[dict[str, Any]], str | None]:
+    """All answer-key rows for an exam family, from Supabase or local AnswerLog
+    xlsx files depending on the storage backend. Cached per-request since a
+    single page load can ask for the same family many times (once per exam
+    variant)."""
+    cache = getattr(g, "_answer_rows_cache", None)
+    if cache is None:
+        cache = {}
+        g._answer_rows_cache = cache
+    key = normalize(category)
+    if key in cache:
+        return cache[key]
 
-    for workbook in workbooks:
-        try:
-            rows = parse_xlsx_rows(workbook)
-        except Exception:
-            continue
-        for row in rows:
-            exam_name = row.get("Exam", "")
-            row_year = row.get("Year", "")
-            row_section = row.get("Section", "")
-            year_match = year is None or str(row_year).split(".")[0] == str(year)
-            section_match = section is None or normalize(row_section) == normalize(section)
-            if normalize(exam_name) == normalize(category) and year_match and section_match:
-                return row, workbook
+    t0 = time.perf_counter()
+    rows: list[dict[str, Any]] = []
+    label: str | None = None
+    if storage.STORAGE_BACKEND == "supabase":
+        rows = storage.fetch_answer_key_rows(category)
+        if rows:
+            label = f"Supabase answer_keys ({category})"
+    if not rows:
+        # Either the csv backend, or the family hasn't been migrated into
+        # Supabase yet — fall back to the local AnswerLog workbook so families
+        # not yet in the database (e.g. AMC10) keep working.
+        preferred = ANSWER_LOG / f"{category}.xlsx"
+        workbooks = [preferred] if preferred.exists() else []
+        workbooks += [p for p in sorted(ANSWER_LOG.glob("*.xlsx")) if p != preferred]
+        for workbook in workbooks:
+            try:
+                workbook_rows = parse_xlsx_rows(workbook)
+            except Exception:
+                continue
+            matching = [row for row in workbook_rows if normalize(row.get("Exam")) == key]
+            if matching:
+                rows = matching
+                label = workbook.name
+                break
+    print(f"[ExamBuddy] answer rows for '{category}' loaded: {len(rows)} row(s) in {(time.perf_counter() - t0) * 1000:.1f}ms ({storage.STORAGE_BACKEND})")
+    cache[key] = (rows, label)
+    return rows, label
+
+
+def find_answer_row(category: str, year: str | None, section: str | None) -> tuple[dict[str, Any] | None, str | None]:
+    rows, label = _answer_rows_for_family(category)
+    for row in rows:
+        row_year = row.get("Year", "")
+        row_section = row.get("Section", "")
+        year_match = year is None or str(row_year).split(".")[0] == str(year)
+        section_match = section is None or normalize(row_section) == normalize(section)
+        if year_match and section_match:
+            return row, label
     return None, None
 
 
 def answer_key_for_exam(exam: dict[str, Any]) -> tuple[dict[int, str], str | None]:
-    row, workbook = find_answer_row(exam["category"], exam["year"], exam["section"])
-    if not row:
+    rows, label = _answer_rows_for_family(exam["category"])
+    matching = [
+        row for row in rows
+        if str(row.get("Year", "")).split(".")[0] == str(exam["year"])
+        and normalize(row.get("Section")) == normalize(exam["section"])
+    ]
+    if not matching:
         return {}, None
-    if row.get("Q") is not None and row.get("A") is not None:
+    if matching[0].get("Q") is not None and matching[0].get("A") is not None:
         key: dict[int, str] = {}
-        for candidate in parse_xlsx_rows(workbook):
-            if (
-                normalize(candidate.get("Exam")) == normalize(exam["category"])
-                and str(candidate.get("Year", "")).split(".")[0] == str(exam["year"])
-                and normalize(candidate.get("Section")) == normalize(exam["section"])
-            ):
-                try:
-                    question = int(candidate.get("Q"))
-                except (TypeError, ValueError):
-                    continue
-                answer = str(candidate.get("A", "")).strip().upper()
-                if answer in ANSWER_CHOICES:
-                    key[question] = answer
-        return key, workbook.name if workbook else None
-    return parse_answer_key(row.get("Answer Key")), workbook.name if workbook else None
+        for candidate in matching:
+            try:
+                question = int(candidate.get("Q"))
+            except (TypeError, ValueError):
+                continue
+            answer = str(candidate.get("A", "")).strip().upper()
+            if answer in ANSWER_CHOICES:
+                key[question] = answer
+        return key, label
+    return parse_answer_key(matching[0].get("Answer Key")), label
 
 
 def answer_rows_for_exam(exam: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return question metadata rows for an exam's current answer workbook."""
-    _, workbook = find_answer_row(exam["category"], exam["year"], exam["section"])
-    if not workbook:
-        return []
-    rows = []
-    for row in parse_xlsx_rows(workbook):
-        if (
-            normalize(row.get("Exam")) == normalize(exam["category"])
-            and str(row.get("Year", "")).split(".")[0] == str(exam["year"])
-            and normalize(row.get("Section")) == normalize(exam["section"])
-            and row.get("Q") is not None
-        ):
-            rows.append(row)
-    return rows
+    """Return question metadata rows for an exam's current answer source."""
+    rows, _ = _answer_rows_for_family(exam["category"])
+    return [
+        row for row in rows
+        if str(row.get("Year", "")).split(".")[0] == str(exam["year"])
+        and normalize(row.get("Section")) == normalize(exam["section"])
+        and row.get("Q") is not None
+    ]
 
 
 def question_numbers_for_session(session: dict[str, Any]) -> list[int]:
@@ -493,12 +616,14 @@ def session_question_pool(session: dict[str, Any]) -> list[dict[str, Any]]:
     return [{"number": number, "category": session["category"], "variant": session["variant"]} for number in question_numbers_for_session(session)]
 
 
-def practice_question_stats(category: str, variant: str) -> tuple[set[int], set[int]]:
+def practice_question_stats(category: str, variant: str) -> tuple[set[int], set[int], bool]:
     right: set[int] = set()
     wrong: set[int] = set()
+    taken = False
     for session in iter_all_sessions():
         if session.get("status") != "evaluated" or session.get("category") != category or session.get("variant") != variant:
             continue
+        taken = True
         for detail in session.get("evaluation", {}).get("details", []):
             try:
                 question = int(detail["question"])
@@ -508,7 +633,7 @@ def practice_question_stats(category: str, variant: str) -> tuple[set[int], set[
                 right.add(question)
             elif detail.get("result") == "Incorrect":
                 wrong.add(question)
-    return right, wrong
+    return right, wrong, taken
 
 
 def practice_exam_options(exam: dict[str, Any]) -> dict[str, Any]:
@@ -525,7 +650,7 @@ def practice_exam_options(exam: dict[str, Any]) -> dict[str, Any]:
             "difficulty": str(row.get("Difficulty") or "Unknown").strip(),
         }
     available = sorted(set(metadata) or set(range(1, exam["question_count"] + 1)))
-    right, wrong = practice_question_stats(exam["category"], exam["variant"])
+    right, wrong, taken = practice_question_stats(exam["category"], exam["variant"])
     return {
         "category": exam["category"],
         "variant": exam["variant"],
@@ -535,6 +660,7 @@ def practice_exam_options(exam: dict[str, Any]) -> dict[str, Any]:
         "available": available,
         "right": sorted(right),
         "wrong": sorted(wrong),
+        "taken": taken,
     }
 
 
@@ -811,13 +937,32 @@ def home():
     )
 
 
+def _read_list_context() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    items = load_read_items()
+    articles = [item for item in items if item.get("item_type", "article") == "article"]
+    books = [item for item in items if item.get("item_type") == "book"]
+    articles.sort(key=lambda item: (item.get("read", False), item.get("added_at", "")))
+    books.sort(key=lambda item: (item.get("read", False), item.get("added_at", "")))
+    return articles, books
+
+
+def _valid_image_url(value: str) -> bool:
+    parsed = urlparse(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
 @app.route("/read-list", methods=["GET", "POST"])
 def read_list_view():
     error = None
     if request.method == "POST":
         url = request.form.get("url", "").strip()
+        image_url = request.form.get("image_url", "").strip()
+        already_read = request.form.get("already_read") == "on"
+        read_date = _parse_read_date(request.form.get("read_date", ""))
         if not url:
             error = "Paste an article link to add it to your Read List."
+        elif image_url and not _valid_image_url(image_url):
+            error = "The image link must be a complete http:// or https:// URL."
         else:
             try:
                 article = fetch_article(url)
@@ -828,8 +973,11 @@ def read_list_view():
                     article.update(
                         {
                             "id": storage.new_read_item_id(),
+                            "item_type": "article",
+                            "cover_url": image_url,
                             "added_at": now_iso(),
-                            "read": False,
+                            "read": already_read,
+                            "read_at": (read_date or now_iso()) if already_read else "",
                             "reading_minutes": "",
                             "feedback": "",
                         }
@@ -839,9 +987,52 @@ def read_list_view():
                     return redirect(url_for("read_list_view"))
             except ValueError as exc:
                 error = str(exc)
-    items = load_read_items()
-    items.sort(key=lambda item: (item.get("read", False), item.get("added_at", "")), reverse=False)
-    return render_template("read_list.html", items=items, error=error)
+    articles, books = _read_list_context()
+    return render_template("read_list.html", articles=articles, books=books, error=error, book_error=None)
+
+
+@app.post("/read-list/books")
+def add_book():
+    book_title = request.form.get("book_title", "").strip()
+    book_author = request.form.get("book_author", "").strip()
+    image_url = request.form.get("image_url", "").strip()
+    already_read = request.form.get("already_read") == "on"
+    read_date = _parse_read_date(request.form.get("read_date", ""))
+    book_error = None
+    if not book_title or not book_author:
+        book_error = "Enter both the book name and the author."
+    elif image_url and not _valid_image_url(image_url):
+        book_error = "The image link must be a complete http:// or https:// URL."
+    else:
+        try:
+            info = fetch_book_cover(book_title, book_author)
+        except ValueError as exc:
+            if image_url:
+                info = {"title": book_title, "author": book_author, "cover_url": ""}
+            else:
+                info = None
+                book_error = str(exc)
+        if info is not None:
+            book = {
+                "id": storage.new_read_item_id(),
+                "item_type": "book",
+                "url": "",
+                "title": info["title"] or book_title,
+                "author": info["author"] or book_author,
+                "cover_url": image_url or info["cover_url"],
+                "summary": "",
+                "headings": [],
+                "added_at": now_iso(),
+                "read": already_read,
+                "read_at": (read_date or now_iso()) if already_read else "",
+                "reading_minutes": "",
+                "feedback": "",
+            }
+            with SESSION_LOCK:
+                create_read_item(book)
+            return redirect(url_for("read_list_view"))
+    articles, books = _read_list_context()
+    return render_template("read_list.html", articles=articles, books=books, error=None, book_error=book_error)
 
 
 @app.post("/read-list/<item_id>")
@@ -849,8 +1040,12 @@ def update_read_item(item_id: str):
     read = request.form.get("read") == "on"
     reading_minutes = request.form.get("reading_minutes", "").strip()[:10]
     feedback = request.form.get("feedback", "").strip()[:3000]
+    image_url = request.form.get("image_url", "").strip()
+    read_date = _parse_read_date(request.form.get("read_date", ""))
+    if image_url and not _valid_image_url(image_url):
+        abort(400, "The image link must be a complete http:// or https:// URL.")
     with SESSION_LOCK:
-        found = apply_read_item_update(item_id, read, reading_minutes, feedback)
+        found = apply_read_item_update(item_id, read, reading_minutes, feedback, image_url, read_date)
     if not found:
         abort(404, "Read list item not found")
     return redirect(url_for("read_list_view"))

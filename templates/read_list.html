@@ -1,52 +1,187 @@
 {% extends "base.html" %}
 {% block title %}Read List · ExamBuddy{% endblock %}
 {% block content %}
-<section class="hero read-list-hero">
-  <div><span class="eyebrow">CURATED READING</span><h1>Read List</h1><p>Turn useful articles into a thoughtful queue, then keep a record of what stayed with you.</p></div>
-  <div class="read-list-count"><strong>{{ items|selectattr('read', 'equalto', true)|list|length }}</strong><span>of {{ items|length }} read</span></div>
-</section>
-
-<section class="card read-add-card">
-  <div class="section-heading compact"><div><span class="eyebrow">ADD AN ARTICLE</span><h2>Bring something worth reading</h2><p class="muted">Paste a public article link and ExamBuddy will pull its title, description, and key headings.</p></div></div>
-  {% if error %}<div class="notice error">{{ error }}</div>{% endif %}
-  <form class="read-add-form" method="post" action="{{ url_for('read_list_view') }}">
-    <label for="articleUrl"><span>Article link</span><input id="articleUrl" name="url" type="url" required placeholder="https://example.com/article"></label>
-    <button class="primary" type="submit">Add to Read List</button>
-  </form>
-</section>
-
-{% if items %}
-<section class="read-list-grid">
-  {% for item in items %}
-  <article class="read-item{% if item.read %} read-item-complete{% endif %}">
-    <div class="read-item-row">
-      <div class="read-item-title"><h2>{{ item.title }}</h2><a class="read-source" href="{{ item.url }}" target="_blank" rel="noopener">{{ item.url }}</a></div>
-      <div class="read-status-group">
-        <span class="read-status{% if not item.read %} hidden{% endif %}">Read</span>
-        <button type="button" class="secondary read-toggle-btn" data-id="{{ item.id }}" data-read="{{ 'true' if item.read else 'false' }}" data-minutes="{{ item.reading_minutes }}" data-feedback="{{ item.feedback }}">{% if item.read %}Mark as unread{% else %}Mark as read{% endif %}</button>
-      </div>
-      <div class="read-item-actions"><form method="post" action="{{ url_for('delete_read_item', item_id=item.id) }}"><button class="ghost danger" type="submit">Remove</button></form></div>
+{% macro read_item_card(item) %}
+<article class="read-card{% if item.read %} read-card-complete{% endif %}" data-read="{{ 'true' if item.read else 'false' }}" data-added="{{ item.added_at }}" data-read-at="{{ item.read_at }}" data-title="{{ item.title|lower }}" data-author="{{ (item.author or '')|lower }}">
+  <div class="read-card-cover">
+    {% if item.cover_url %}<img src="{{ item.cover_url }}" alt="Cover of {{ item.title }}">{% else %}<span class="read-cover-placeholder" aria-hidden="true">{{ '&#128214;'|safe if item.item_type == 'book' else '&#128240;'|safe }}</span>{% endif %}
+    <span class="read-status{% if not item.read %} hidden{% endif %}">Read</span>
+  </div>
+  <div class="read-card-body">
+    <h2>{{ item.title }}</h2>
+    {% if item.item_type == 'book' %}
+      <span class="read-author">{{ item.author }}</span>
+    {% else %}
+      <a class="read-source" href="{{ item.url }}" target="_blank" rel="noopener">{{ item.url }}</a>
+    {% endif %}
+    <div class="read-dates">
+      <span>Added {{ item.added_at[:10] }}</span>
+      <span class="read-date-tag{% if not (item.read and item.read_at) %} hidden{% endif %}">Read {{ item.read_at[:10] if item.read_at else '' }}</span>
+    </div>
+    <div class="read-card-actions">
+      <button type="button" class="secondary read-toggle-btn" data-id="{{ item.id }}" data-read="{{ 'true' if item.read else 'false' }}" data-minutes="{{ item.reading_minutes }}" data-feedback="{{ item.feedback }}">{% if item.read %}Mark as unread{% else %}Mark as read{% endif %}</button>
+      <form method="post" action="{{ url_for('delete_read_item', item_id=item.id) }}"><button class="ghost danger" type="submit">Remove</button></form>
     </div>
     <details class="read-details" id="read-details-{{ item.id }}">
-      <summary>Article details</summary>
+      <summary>{% if item.item_type == 'book' %}Notes &amp; progress{% else %}Article details{% endif %}</summary>
+      {% if item.item_type != 'book' %}
       <p class="read-summary">{{ item.summary }}</p>
       {% if item.headings %}<div class="read-headings"><span>Key sections</span>{% for heading in item.headings %}<b>{{ heading }}</b>{% endfor %}</div>{% endif %}
+      {% endif %}
       <form class="read-reflection" method="post" action="{{ url_for('update_read_item', item_id=item.id) }}">
         <label class="read-check"><input type="checkbox" name="read" {% if item.read %}checked{% endif %}> Mark as read</label>
-        <label><span>Reading time (minutes, optional)</span><input name="reading_minutes" type="number" min="1" max="999" value="{{ item.reading_minutes }}" placeholder="e.g. 20"></label>
+        <label><span>Date finished reading (optional, defaults to today)</span><input name="read_date" type="date" value="{{ item.read_at[:10] if item.read_at else '' }}"></label>
+        <label><span>{% if item.item_type == 'book' %}Time spent reading (minutes, optional){% else %}Reading time (minutes, optional){% endif %}</span><input name="reading_minutes" type="number" min="1" max="999" value="{{ item.reading_minutes }}" placeholder="e.g. 20"></label>
         <label><span>Reflection or feedback (optional)</span><textarea name="feedback" rows="3" maxlength="3000" placeholder="What was useful, surprising, or worth revisiting?">{{ item.feedback }}</textarea></label>
-        <div class="read-item-actions"><button class="secondary" type="submit">Save progress</button></div>
+        <label><span>Cover image link (optional)</span><input name="image_url" type="url" value="{{ item.cover_url }}" placeholder="https://example.com/cover.jpg"></label>
+        <div class="read-card-actions"><button class="secondary" type="submit">Save progress</button></div>
       </form>
     </details>
-  </article>
-  {% endfor %}
+  </div>
+</article>
+{% endmacro %}
+
+{% macro read_controls(panel, show_author_sort) %}
+<div class="read-controls">
+  <div class="read-view-toggle" role="group" aria-label="Choose view">
+    <button type="button" class="view-toggle-btn active" data-view="card">Cards</button>
+    <button type="button" class="view-toggle-btn" data-view="list">List</button>
+  </div>
+  <div class="read-filter" role="group" aria-label="Filter {{ panel }}">
+    <button type="button" class="filter-btn active" data-filter="all">All</button>
+    <button type="button" class="filter-btn" data-filter="unread">Unread</button>
+    <button type="button" class="filter-btn" data-filter="read">Read</button>
+  </div>
+  <label class="read-sort"><span>Sort by</span>
+    <select data-sort>
+      <option value="added_desc">Newest added</option>
+      <option value="added_asc">Oldest added</option>
+      <option value="title_asc">Title A&ndash;Z</option>
+      <option value="read_desc">Recently read</option>
+      {% if show_author_sort %}<option value="author_asc">Author A&ndash;Z</option>{% endif %}
+    </select>
+  </label>
+</div>
+{% endmacro %}
+
+<section class="hero read-list-hero">
+  <div><span class="eyebrow">CURATED READING</span><h1>Read List</h1><p>Turn useful articles and novels into a thoughtful queue, then keep a record of what stayed with you.</p></div>
 </section>
-{% else %}
-<section class="card empty-state read-empty"><h2>Your reading queue is clear</h2><p>Add an article above to start building a considered list.</p></section>
-{% endif %}
+
+<section class="read-summary-grid">
+  <div class="stat"><span>Articles</span><strong>{{ articles|length }}</strong></div>
+  <div class="stat correct"><span>Articles read</span><strong>{{ articles|selectattr('read', 'equalto', true)|list|length }}</strong></div>
+  <div class="stat"><span>Novels</span><strong>{{ books|length }}</strong></div>
+  <div class="stat correct"><span>Novels read</span><strong>{{ books|selectattr('read', 'equalto', true)|list|length }}</strong></div>
+</section>
+
+{% set active_tab = 'books' if book_error else 'articles' %}
+<div class="read-tabs" role="tablist">
+  <button type="button" class="read-tab{% if active_tab == 'articles' %} active{% endif %}" data-tab="articles">Articles</button>
+  <button type="button" class="read-tab{% if active_tab == 'books' %} active{% endif %}" data-tab="books">Novels</button>
+</div>
+
+<div class="read-tab-panel{% if active_tab != 'articles' %} hidden{% endif %}" data-panel="articles">
+  <section class="card read-add-card">
+    <div class="section-heading compact"><div><span class="eyebrow">ARTICLES</span><h2>Bring something worth reading</h2><p class="muted">Paste a public article link and ExamBuddy will pull its title, description, and key headings.</p></div></div>
+    {% if error %}<div class="notice error">{{ error }}</div>{% endif %}
+    <form class="read-add-form" method="post" action="{{ url_for('read_list_view') }}">
+      <label for="articleUrl"><span>Article link</span><input id="articleUrl" name="url" type="url" required placeholder="https://example.com/article"></label>
+      <label for="articleImage"><span>Cover image link (optional)</span><input id="articleImage" name="image_url" type="url" placeholder="https://example.com/cover.jpg"></label>
+      <label class="read-check" for="articleRead"><input id="articleRead" type="checkbox" name="already_read"> Already read</label>
+      <label for="articleReadDate"><span>Date read (optional, defaults to today)</span><input id="articleReadDate" name="read_date" type="date"></label>
+      <button class="primary" type="submit">Add article</button>
+    </form>
+  </section>
+
+  {% if articles %}
+  {{ read_controls('articles', false) }}
+  <section class="read-card-grid">
+    {% for item in articles %}{{ read_item_card(item) }}{% endfor %}
+  </section>
+  {% else %}
+  <section class="card empty-state read-empty"><h2>No articles yet</h2><p>Add an article above to start building a considered list.</p></section>
+  {% endif %}
+</div>
+
+<div class="read-tab-panel{% if active_tab != 'books' %} hidden{% endif %}" data-panel="books">
+  <section class="card read-add-card">
+    <div class="section-heading compact"><div><span class="eyebrow">NOVELS</span><h2>Add a book</h2><p class="muted">Enter the book name and author, and ExamBuddy will fetch a cover image from Open Library.</p></div></div>
+    {% if book_error %}<div class="notice error">{{ book_error }}</div>{% endif %}
+    <form class="read-add-form read-add-form-book" method="post" action="{{ url_for('add_book') }}">
+      <label for="bookTitle"><span>Book name</span><input id="bookTitle" name="book_title" type="text" required placeholder="e.g. The Hobbit"></label>
+      <label for="bookAuthor"><span>Author</span><input id="bookAuthor" name="book_author" type="text" required placeholder="e.g. J.R.R. Tolkien"></label>
+      <label for="bookImage"><span>Cover image link (optional, overrides auto cover)</span><input id="bookImage" name="image_url" type="url" placeholder="https://example.com/cover.jpg"></label>
+      <label class="read-check" for="bookRead"><input id="bookRead" type="checkbox" name="already_read"> Already read</label>
+      <label for="bookReadDate"><span>Date read (optional, defaults to today)</span><input id="bookReadDate" name="read_date" type="date"></label>
+      <button class="primary" type="submit">Add book</button>
+    </form>
+  </section>
+
+  {% if books %}
+  {{ read_controls('books', true) }}
+  <section class="read-card-grid">
+    {% for item in books %}{{ read_item_card(item) }}{% endfor %}
+  </section>
+  {% else %}
+  <section class="card empty-state read-empty"><h2>No novels yet</h2><p>Add a book above to start tracking what you're reading.</p></section>
+  {% endif %}
+</div>
 {% endblock %}
 {% block scripts %}
 <script>
+document.querySelectorAll('.read-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.read-tab').forEach(t => t.classList.toggle('active', t === tab));
+    document.querySelectorAll('.read-tab-panel').forEach(panel => {
+      panel.classList.toggle('hidden', panel.dataset.panel !== tab.dataset.tab);
+    });
+  });
+});
+
+const readGrids = () => document.querySelectorAll('.read-card-grid');
+function applyView(view) {
+  readGrids().forEach(grid => grid.classList.toggle('view-list', view === 'list'));
+  document.querySelectorAll('.view-toggle-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.view === view));
+}
+applyView(localStorage.getItem('read-list-view') || 'card');
+document.querySelectorAll('.view-toggle-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    localStorage.setItem('read-list-view', btn.dataset.view);
+    applyView(btn.dataset.view);
+  });
+});
+
+function applySort(grid, sortValue) {
+  const cards = [...grid.querySelectorAll('.read-card')];
+  const compare = {
+    added_desc: (a, b) => b.dataset.added.localeCompare(a.dataset.added),
+    added_asc: (a, b) => a.dataset.added.localeCompare(b.dataset.added),
+    title_asc: (a, b) => a.dataset.title.localeCompare(b.dataset.title),
+    read_desc: (a, b) => (b.dataset.readAt || '').localeCompare(a.dataset.readAt || ''),
+    author_asc: (a, b) => (a.dataset.author || '').localeCompare(b.dataset.author || ''),
+  }[sortValue];
+  if (compare) cards.sort(compare).forEach(card => grid.appendChild(card));
+}
+
+document.querySelectorAll('.read-tab-panel').forEach(panel => {
+  const grid = panel.querySelector('.read-card-grid');
+  const filterButtons = panel.querySelectorAll('.filter-btn');
+  filterButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      filterButtons.forEach(b => b.classList.toggle('active', b === btn));
+      if (!grid) return;
+      grid.querySelectorAll('.read-card').forEach(card => {
+        const isRead = card.dataset.read === 'true';
+        const show = btn.dataset.filter === 'all' || (btn.dataset.filter === 'read' && isRead) || (btn.dataset.filter === 'unread' && !isRead);
+        card.classList.toggle('hidden', !show);
+      });
+    });
+  });
+  const sortSelect = panel.querySelector('select[data-sort]');
+  if (sortSelect && grid) sortSelect.addEventListener('change', () => applySort(grid, sortSelect.value));
+});
+
 document.querySelectorAll('.read-toggle-btn').forEach(button => {
   button.addEventListener('click', async () => {
     const nowRead = button.dataset.read !== 'true';
@@ -61,10 +196,22 @@ document.querySelectorAll('.read-toggle-btn').forEach(button => {
       }),
     });
     if (response.ok) {
-      const article = button.closest('.read-item');
-      article.classList.toggle('read-item-complete', nowRead);
-      article.querySelector('.read-status').classList.toggle('hidden', !nowRead);
-      const checkbox = article.querySelector('.read-reflection input[name="read"]');
+      const card = button.closest('.read-card');
+      card.classList.toggle('read-card-complete', nowRead);
+      card.dataset.read = nowRead ? 'true' : 'false';
+      card.querySelector('.read-status').classList.toggle('hidden', !nowRead);
+      const dateTag = card.querySelector('.read-date-tag');
+      if (dateTag) {
+        if (nowRead) {
+          if (!card.dataset.readAt) card.dataset.readAt = new Date().toISOString();
+          dateTag.textContent = `Read ${card.dataset.readAt.slice(0, 10)}`;
+          dateTag.classList.remove('hidden');
+        } else {
+          card.dataset.readAt = '';
+          dateTag.classList.add('hidden');
+        }
+      }
+      const checkbox = card.querySelector('.read-reflection input[name="read"]');
       if (checkbox) checkbox.checked = nowRead;
       button.dataset.read = nowRead ? 'true' : 'false';
       button.textContent = nowRead ? 'Mark as unread' : 'Mark as read';

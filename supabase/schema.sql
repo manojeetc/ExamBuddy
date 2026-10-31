@@ -156,18 +156,29 @@ create table if not exists exam_evaluation_details (
 create table if not exists reading_list (
   id uuid primary key default gen_random_uuid(),
   user_id text not null default 'Panda1' references users(username),
-  url text not null,
+  item_type text not null default 'article' check (item_type in ('article', 'book')),
+  url text,
   title text not null,
+  author text,
+  cover_url text,
   summary text default '',
   headings text[] not null default '{}',
   read boolean not null default false,
+  read_at timestamptz,
   reading_minutes text default '',
   feedback text default '',
   added_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (user_id, url)
 );
+-- Relax/extend columns for databases created before books were supported.
+alter table reading_list add column if not exists item_type text not null default 'article';
+alter table reading_list add column if not exists author text;
+alter table reading_list add column if not exists cover_url text;
+alter table reading_list add column if not exists read_at timestamptz;
+alter table reading_list alter column url drop not null;
 create index if not exists idx_reading_list_user_read on reading_list (user_id, read);
+create index if not exists idx_reading_list_user_type on reading_list (user_id, item_type);
 
 -- ---------------------------------------------------------------------------
 -- Reading log: one history row per save, so repeated reflections are kept

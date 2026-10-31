@@ -7,6 +7,7 @@ persisted. The single application user is always "Panda1".
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 import uuid
@@ -58,6 +59,10 @@ def _safe_int(value: Any) -> int | None:
         return int(str(value).split(".")[0])
     except (TypeError, ValueError):
         return None
+
+
+def _normalize(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
 
 
 class StorageConfigError(RuntimeError):
@@ -507,12 +512,45 @@ def delete_session_record(session_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Answer keys (grading source for the Supabase backend)
+# ---------------------------------------------------------------------------
+def fetch_answer_key_rows(exam_family: str) -> list[dict[str, Any]]:
+    """Return answer-key rows for a family in the same shape as a parsed xlsx
+    row, so app.py's grading logic doesn't need to branch on backend."""
+    t0 = time.perf_counter()
+    with get_cursor() as cur:
+        cur.execute(
+            "select exam_family, exam_year, exam_section, question_number, answer, topic_section, topic, difficulty "
+            "from answer_keys where user_id = %s",
+            (DEFAULT_USER,),
+        )
+        rows = cur.fetchall()
+    target = _normalize(exam_family)
+    result = [
+        {
+            "Exam": row["exam_family"],
+            "Year": row["exam_year"],
+            "Section": row["exam_section"] or "",
+            "Q": row["question_number"],
+            "A": row["answer"],
+            "Section_2": row["topic_section"],
+            "Topic": row["topic"],
+            "Difficulty": row["difficulty"],
+        }
+        for row in rows
+        if _normalize(row["exam_family"]) == target
+    ]
+    print(f"[ExamBuddy][storage] fetch_answer_key_rows('{exam_family}') matched {len(result)}/{len(rows)} row(s) in {(time.perf_counter() - t0) * 1000:.1f}ms")
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Read List
 # ---------------------------------------------------------------------------
 def fetch_read_items() -> list[dict[str, Any]]:
     with get_cursor() as cur:
         cur.execute(
-            "select id, url, title, summary, headings, read, reading_minutes, feedback, added_at "
+            "select id, item_type, url, title, author, cover_url, summary, headings, read, read_at, reading_minutes, feedback, added_at "
             "from reading_list where user_id = %s order by added_at desc",
             (DEFAULT_USER,),
         )
@@ -520,11 +558,15 @@ def fetch_read_items() -> list[dict[str, Any]]:
     return [
         {
             "id": str(row["id"]),
-            "url": row["url"],
+            "item_type": row["item_type"] or "article",
+            "url": row["url"] or "",
             "title": row["title"],
+            "author": row["author"] or "",
+            "cover_url": row["cover_url"] or "",
             "summary": row["summary"] or "",
             "headings": list(row["headings"] or []),
             "read": row["read"],
+            "read_at": row["read_at"].isoformat() if row["read_at"] else "",
             "reading_minutes": row["reading_minutes"] or "",
             "feedback": row["feedback"] or "",
             "added_at": row["added_at"].isoformat() if row["added_at"] else _now_iso(),
@@ -537,23 +579,36 @@ def insert_read_item(item: dict[str, Any]) -> None:
     with get_cursor(commit=True) as cur:
         cur.execute(
             """
-            insert into reading_list (id, user_id, url, title, summary, headings, read, reading_minutes, feedback, added_at)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            insert into reading_list (id, user_id, item_type, url, title, author, cover_url, summary, headings, read, read_at, reading_minutes, feedback, added_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             on conflict (user_id, url) do nothing
             """,
             (
-                item["id"], DEFAULT_USER, item["url"], item["title"], item.get("summary", ""),
-                item.get("headings", []), item.get("read", False), item.get("reading_minutes", ""),
+                item["id"], DEFAULT_USER, item.get("item_type", "article"), item.get("url") or None,
+                item["title"], item.get("author") or None, item.get("cover_url") or None, item.get("summary", ""),
+                item.get("headings", []), item.get("read", False), item.get("read_at") or None, item.get("reading_minutes", ""),
                 item.get("feedback", ""), item.get("added_at") or _now_iso(),
             ),
         )
 
 
-def update_read_item_record(item_id: str, read: bool, reading_minutes: str, feedback: str) -> bool:
+def update_read_item_record(item_id: str, read: bool, reading_minutes: str, feedback: str, cover_url: str = "", read_date: str = "") -> bool:
     with get_cursor(commit=True) as cur:
         cur.execute(
-            "update reading_list set read = %s, reading_minutes = %s, feedback = %s where id = %s and user_id = %s",
-            (read, reading_minutes, feedback, item_id, DEFAULT_USER),
+            """
+            update reading_list set
+              read = %s,
+              read_at = case
+                when %s and %s <> '' then %s::timestamptz
+                when %s then coalesce(read_at, now())
+                else null
+              end,
+              reading_minutes = %s,
+              feedback = %s,
+              cover_url = coalesce(nullif(%s, ''), cover_url)
+            where id = %s and user_id = %s
+            """,
+            (read, read, read_date, read_date, read, reading_minutes, feedback, cover_url, item_id, DEFAULT_USER),
         )
         updated = cur.rowcount > 0
         if updated:
