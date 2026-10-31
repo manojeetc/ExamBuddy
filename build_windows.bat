@@ -22,12 +22,15 @@ echo Building AMC Exam Practice...
   --add-data "Response;Response" ^
   --add-data "templates;templates" ^
   --add-data "static;static" ^
+  --add-data "supabase;supabase" ^
   launcher.py
 
 if errorlevel 1 (
   echo Build failed.
   exit /b 1
 )
+
+if exist ".env" copy /Y ".env" "dist\AMCExamPractice\.env" >nul
 
 echo.
 echo Build complete: dist\AMCExamPractice\AMCExamPractice.exe
